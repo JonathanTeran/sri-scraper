@@ -1590,9 +1590,6 @@ class SRIScraperEngine:
                 if (existing) existing.remove();
                 const banner = document.createElement('div');
                 banner.id = 'codex-captcha-assist';
-                banner.innerText =
-                    'Modo asistido activo. Complete el captcha y use el boton Consultar del portal. '
-                    + 'La espera termina en ' + timeoutSec + ' segundos.';
                 Object.assign(banner.style, {
                     position: 'fixed',
                     top: '12px',
@@ -1606,7 +1603,78 @@ class SRIScraperEngine:
                     boxShadow: '0 10px 25px rgba(0,0,0,0.25)',
                     maxWidth: '360px',
                 });
+                banner.innerHTML = `
+                    <div style="font-weight:600;margin-bottom:8px;">
+                        Modo asistido activo
+                    </div>
+                    <div style="line-height:1.4;">
+                        Complete el captcha y luego use el boton de abajo si el
+                        Consultar del portal no responde. La espera termina en
+                        ${timeoutSec} segundos.
+                    </div>
+                    <button
+                        id="codex-captcha-assist-submit"
+                        type="button"
+                        style="margin-top:10px;padding:8px 12px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:600;cursor:pointer;"
+                    >
+                        Enviar consulta asistida
+                    </button>
+                    <div id="codex-captcha-assist-status" style="margin-top:8px;font-size:12px;opacity:0.9;"></div>
+                `;
                 document.body.appendChild(banner);
+
+                const statusEl = document.getElementById('codex-captcha-assist-status');
+                const setStatus = (text) => {
+                    if (statusEl) statusEl.textContent = text || '';
+                };
+                const findToken = () => {
+                    const tokenField = Array.from(
+                        document.querySelectorAll('[name="g-recaptcha-response"]')
+                    ).find((el) => (el.value || '').length > 100);
+                    return tokenField ? tokenField.value : '';
+                };
+                const assistedSubmit = () => {
+                    const token = findToken();
+                    if (!token) {
+                        setStatus('Todavia no se detecta token de captcha.');
+                        return false;
+                    }
+                    if (typeof window.rcBuscar === 'function') {
+                        setStatus('Enviando consulta asistida...');
+                        window.rcBuscar({ 'g-recaptcha-response': token });
+                        return true;
+                    }
+                    if (typeof window.onSubmit === 'function') {
+                        setStatus('Enviando via onSubmit...');
+                        window.onSubmit();
+                        return true;
+                    }
+                    const btn = document.querySelector('[id="frmPrincipal:btnBuscar"]');
+                    if (btn) {
+                        setStatus('Enviando via click del boton...');
+                        btn.click();
+                        return true;
+                    }
+                    setStatus('No se encontro un flujo de envio disponible.');
+                    return false;
+                };
+
+                window.__codexAssistedSubmit = assistedSubmit;
+                const helperBtn = document.getElementById('codex-captcha-assist-submit');
+                if (helperBtn) {
+                    helperBtn.onclick = assistedSubmit;
+                }
+
+                if (typeof window.executeRecaptcha === 'function' && !window.__codexExecuteRecaptchaWrapped) {
+                    const originalExecuteRecaptcha = window.executeRecaptcha;
+                    window.executeRecaptcha = function(...args) {
+                        if (assistedSubmit()) {
+                            return;
+                        }
+                        return originalExecuteRecaptcha.apply(this, args);
+                    };
+                    window.__codexExecuteRecaptchaWrapped = true;
+                }
             }
             """,
             {"timeoutSec": timeout_sec},
