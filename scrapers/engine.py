@@ -2152,31 +2152,54 @@ class SRIScraperEngine:
             "[id$='_ds_next']:not(.rf-ds-dis)"
         )
 
-        async def _obtener_tabla_resultados():
-            return await page.query_selector(
-                "[id='frmPrincipal:tablaCompRecibidos'], "
-                "[id='frmPrincipal:panelListaComprobantes'], "
-                "[id='frmPrincipal:pnldocumentosrecibidos']"
-            )
+        async def _obtener_contenedor_resultados():
+            for selector in [
+                "[id='frmPrincipal:tablaCompRecibidos']",
+                "[id='frmPrincipal:pnldocumentosrecibidos']",
+                "[id='frmPrincipal:panelListaComprobantes']",
+            ]:
+                handle = await page.query_selector(selector)
+                if handle:
+                    return handle
+            return None
+
+        async def _obtener_cuerpo_resultados():
+            for selector in [
+                "[id='frmPrincipal:tablaCompRecibidos_data']",
+                "tbody[id$='tablaCompRecibidos_data']",
+                "[id='frmPrincipal:tablaCompRecibidos'] tbody.ui-datatable-data",
+            ]:
+                handle = await page.query_selector(selector)
+                if handle:
+                    return handle
+            return None
 
         async def _obtener_filas_resultados():
-            tabla = await _obtener_tabla_resultados()
-            if tabla:
-                filas = await tabla.query_selector_all(
-                    "tbody[id$='_data'] > tr, "
-                    "tbody.ui-datatable-data > tr, "
-                    "tbody.rf-dt-b > tr"
-                )
+            cuerpo = await _obtener_cuerpo_resultados()
+            if cuerpo:
+                filas = await cuerpo.query_selector_all(":scope > tr")
                 if filas:
                     return filas
-            return await page.query_selector_all(
-                "[id='frmPrincipal:tablaCompRecibidos_data'] > tr, "
-                "tbody[id$='tablaCompRecibidos_data'] > tr, "
-                "tbody.ui-datatable-data > tr"
-            )
+            contenedor = await _obtener_contenedor_resultados()
+            if contenedor:
+                return await contenedor.query_selector_all(
+                    "tbody[id$='tablaCompRecibidos_data'] > tr, "
+                    "tbody.ui-datatable-data > tr"
+                )
+            return []
 
         async def _obtener_boton_siguiente():
-            tabla = await _obtener_tabla_resultados()
+            for selector in [
+                "[id='frmPrincipal:tablaCompRecibidos_paginator_bottom']",
+                "[id='frmPrincipal:tablaCompRecibidos']",
+            ]:
+                scoped_root = await page.query_selector(selector)
+                if not scoped_root:
+                    continue
+                scoped = await scoped_root.query_selector(next_page_selector)
+                if scoped:
+                    return scoped
+            tabla = await _obtener_contenedor_resultados()
             if tabla:
                 scoped = await tabla.query_selector(next_page_selector)
                 if scoped:
