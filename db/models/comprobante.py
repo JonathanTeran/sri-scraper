@@ -14,6 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.base import Base
+from utils.time import utc_now
 
 
 class TipoComprobante(str, enum.Enum):
@@ -111,7 +112,7 @@ class Comprobante(Base):
     parse_error_msg: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=utc_now)
 
     # Relaciones
     tenant = relationship("Tenant", back_populates="comprobantes")

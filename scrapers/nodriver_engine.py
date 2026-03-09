@@ -26,6 +26,7 @@ from scrapers.exceptions import (
     SRISessionExpiredError,
     SRITimeoutError,
 )
+from utils.time import utc_now
 
 log = structlog.get_logger()
 
@@ -113,7 +114,7 @@ class SRINodriverEngine:
         )
 
     async def ejecutar(self) -> EjecucionResult:
-        inicio = datetime.utcnow()
+        inicio = utc_now()
         result = EjecucionResult()
 
         try:
@@ -135,7 +136,7 @@ class SRINodriverEngine:
             self._log.error("error_inesperado", error=str(e))
             raise
         finally:
-            duracion = (datetime.utcnow() - inicio).total_seconds()
+            duracion = (utc_now() - inicio).total_seconds()
             result.duracion_seg = duracion
             self._log.info("ejecucion_finalizada", duracion_seg=duracion)
             await self._cerrar_browser()

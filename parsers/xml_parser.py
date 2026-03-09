@@ -85,13 +85,26 @@ def _text(element: etree._Element | None, tag: str) -> str:
     return ""
 
 
-def _decimal(value: str) -> Decimal:
+def _decimal(
+    value: str,
+    *,
+    field_name: str | None = None,
+    required: bool = False,
+) -> Decimal:
     """Convierte string a Decimal de forma segura."""
     if not value:
+        if required:
+            raise ValueError(
+                f"Campo numérico requerido ausente: {field_name or 'desconocido'}"
+            )
         return Decimal("0")
     try:
         return Decimal(value)
     except InvalidOperation:
+        if required:
+            raise ValueError(
+                f"Campo numérico inválido: {field_name or 'desconocido'}"
+            )
         return Decimal("0")
 
 
@@ -127,6 +140,11 @@ def _strip_namespace(root: etree._Element) -> None:
             if "}" in key:
                 new_key = key.split("}", 1)[1]
                 elem.attrib[new_key] = elem.attrib.pop(key)
+
+
+def _require_non_empty(value: str, field_name: str) -> None:
+    if not value:
+        raise ValueError(f"Campo requerido ausente: {field_name}")
 
 
 # ── Parseo de secciones ────────────────────────────────────────────────────
@@ -324,13 +342,19 @@ def _parse_info_factura(
         )
         result["periodo_fiscal"] = ""
         result["total_sin_impuestos"] = _decimal(
-            _text(info, "totalSinImpuestos")
+            _text(info, "totalSinImpuestos"),
+            field_name="totalSinImpuestos",
+            required=True,
         )
         result["total_descuento"] = _decimal(
             _text(info, "totalDescuento")
         )
         result["total_iva"] = _calcular_total_iva(info)
-        result["importe_total"] = _decimal(_text(info, "importeTotal"))
+        result["importe_total"] = _decimal(
+            _text(info, "importeTotal"),
+            field_name="importeTotal",
+            required=True,
+        )
         result["moneda"] = _text(info, "moneda") or "DOLAR"
         result["propina"] = _decimal(_text(info, "propina"))
         result["pagos"] = _parse_pagos(info)
@@ -395,12 +419,35 @@ def parse_comprobante_sri(xml_bytes: bytes) -> ComprobanteParseado:
 
     # Info tributaria
     info_tributaria = _parse_info_tributaria(comprobante_root)
+    _require_non_empty(info_tributaria.ruc, "infoTributaria.ruc")
+    _require_non_empty(
+        info_tributaria.razon_social,
+        "infoTributaria.razonSocial",
+    )
+    _require_non_empty(
+        info_tributaria.clave_acceso,
+        "infoTributaria.claveAcceso",
+    )
+    _require_non_empty(info_tributaria.cod_doc, "infoTributaria.codDoc")
+    _require_non_empty(info_tributaria.estab, "infoTributaria.estab")
+    _require_non_empty(info_tributaria.pto_emi, "infoTributaria.ptoEmi")
+    _require_non_empty(
+        info_tributaria.secuencial,
+        "infoTributaria.secuencial",
+    )
 
     # Detectar tipo
     tipo = _detectar_tipo(comprobante_root, info_tributaria.cod_doc)
 
     # Parsear info específica
     info = _parse_info_factura(comprobante_root, tipo)
+    if info.get("fecha_emision") is None:
+        raise ValueError("Campo requerido ausente: fechaEmision")
+    if tipo != "retencion":
+        _require_non_empty(
+            info.get("identificacion_receptor", ""),
+            "identificacionComprador",
+        )
 
     # Detalles (no aplica a retenciones)
     detalles: list[DetalleFactura] = []

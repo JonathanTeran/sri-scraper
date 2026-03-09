@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.base import Base
+from utils.time import utc_now
 
 
 class Tenant(Base):
@@ -20,9 +21,9 @@ class Tenant(Base):
     sri_password_enc: Mapped[str] = mapped_column(Text)
     activo: Mapped[bool] = mapped_column(default=True)
     config: Mapped[dict] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=utc_now)
     updated_at: Mapped[datetime | None] = mapped_column(
-        nullable=True, onupdate=datetime.utcnow
+        nullable=True, onupdate=utc_now
     )
 
     comprobantes = relationship("Comprobante", back_populates="tenant")

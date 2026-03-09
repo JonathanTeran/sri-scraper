@@ -169,6 +169,8 @@ class SRIScraperEngine:
             # Fallback to SOAP only if row downloads failed entirely and we
             # still have claves parsed from the result table.
             if (
+                self._collect_results
+                and
                 not any(item.get("xml_bytes") for item in xmls)
                 and self._comprobantes_html
             ):

@@ -6,6 +6,7 @@ from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.base import Base
+from utils.time import utc_now
 
 
 class EstadoEjecucion(str, enum.Enum):
@@ -41,7 +42,7 @@ class EjecucionLog(Base):
         String(500), nullable=True
     )
     pagina_actual: Mapped[int] = mapped_column(default=1)
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=utc_now)
     finished_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     tenant = relationship("Tenant", back_populates="ejecuciones")

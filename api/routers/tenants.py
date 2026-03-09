@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.dependencies import get_db, get_settings_dep
 from config.settings import Settings
 from db.models.tenant import Tenant
-from utils.crypto import encrypt
+from scrapers.credential_validator import validar_credenciales_sri
+from utils.crypto import decrypt, encrypt
 
 router = APIRouter()
 
@@ -39,6 +40,10 @@ class TenantCreate(BaseModel):
     config: dict = Field(
         default_factory=dict,
         description="Configuración adicional del tenant (ej: página inicial, filtros)",
+    )
+    validar_credenciales: bool = Field(
+        default=False,
+        description="Si es true, intenta validar el login del SRI antes de guardar",
     )
 
     model_config = {
@@ -70,6 +75,21 @@ class TenantUpdate(BaseModel):
         None, description="Activar/desactivar el tenant para scraping automático"
     )
     config: dict | None = Field(None, description="Nueva configuración adicional")
+    validar_credenciales: bool = Field(
+        default=False,
+        description="Si es true, intenta validar las nuevas credenciales antes de guardar",
+    )
+
+
+class TenantCredentialCheck(BaseModel):
+    ruc: str = Field(..., min_length=13, max_length=13)
+    sri_usuario: str = Field(...)
+    sri_password: str = Field(...)
+
+
+class TenantCredentialCheckResponse(BaseModel):
+    ok: bool
+    message: str
 
 
 class TenantResponse(BaseModel):
@@ -154,6 +174,16 @@ async def crear_tenant(
     if existing.scalar_one_or_none():
         raise HTTPException(400, f"Ya existe un tenant con RUC {data.ruc}")
 
+    if data.validar_credenciales:
+        validation = await validar_credenciales_sri(
+            ruc=data.ruc,
+            usuario=data.sri_usuario,
+            password=data.sri_password,
+            settings=settings,
+        )
+        if not validation.ok:
+            raise HTTPException(400, validation.message)
+
     tenant = Tenant(
         nombre=data.nombre,
         ruc=data.ruc,
@@ -211,6 +241,24 @@ async def actualizar_tenant(
     if not tenant:
         raise HTTPException(404, "Tenant no encontrado")
 
+    nuevo_usuario = data.sri_usuario or decrypt(
+        tenant.sri_usuario_enc,
+        settings.secret_key,
+    )
+    nuevo_password = data.sri_password or decrypt(
+        tenant.sri_password_enc,
+        settings.secret_key,
+    )
+    if data.validar_credenciales:
+        validation = await validar_credenciales_sri(
+            ruc=tenant.ruc,
+            usuario=nuevo_usuario,
+            password=nuevo_password,
+            settings=settings,
+        )
+        if not validation.ok:
+            raise HTTPException(400, validation.message)
+
     if data.nombre is not None:
         tenant.nombre = data.nombre
     if data.sri_usuario is not None:
@@ -229,6 +277,29 @@ async def actualizar_tenant(
     await db.flush()
     await db.refresh(tenant)
     return tenant
+
+
+@router.post(
+    "/tenants/validate-credentials",
+    response_model=TenantCredentialCheckResponse,
+    summary="Validar credenciales SRI sin guardar el tenant",
+)
+async def validar_credenciales(
+    data: TenantCredentialCheck,
+    settings: Settings = Depends(get_settings_dep),
+):
+    result = await validar_credenciales_sri(
+        ruc=data.ruc,
+        usuario=data.sri_usuario,
+        password=data.sri_password,
+        settings=settings,
+    )
+    if not result.ok:
+        raise HTTPException(400, result.message)
+    return TenantCredentialCheckResponse(
+        ok=result.ok,
+        message=result.message,
+    )
 
 
 @router.delete(

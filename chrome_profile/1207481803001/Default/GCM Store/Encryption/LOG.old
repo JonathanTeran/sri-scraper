@@ -1,2 +1,3 @@
-2026/03/08-22:59:50.318 46523a Creating DB /Users/jonathanteran/sri-scraper/chrome_profile/1207481803001/Default/GCM Store/Encryption since it was missing.
-2026/03/08-22:59:50.351 46523a Reusing MANIFEST /Users/jonathanteran/sri-scraper/chrome_profile/1207481803001/Default/GCM Store/Encryption/MANIFEST-000001
+2026/03/09-04:10:15.610 3b Reusing MANIFEST /app/chrome_profile/1207481803001/Default/GCM Store/Encryption/MANIFEST-000001
+2026/03/09-04:10:15.611 3b Recovering log #3
+2026/03/09-04:10:15.612 3b Reusing old log /app/chrome_profile/1207481803001/Default/GCM Store/Encryption/000003.log 

@@ -3,6 +3,8 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from captcha.factory import crear_resolvers
 from scrapers.engine import SRIScraperEngine, EstadoPortal, URLS
 
@@ -33,6 +35,7 @@ class TestSRIScraperEngine:
         settings.browser_proxy_username = ""
         settings.browser_proxy_password = ""
         settings.browser_proxy_bypass = ""
+        settings.recaptcha_sitekey_fallback = ""
 
         return SRIScraperEngine(
             tenant_ruc="0916429921001",
@@ -230,6 +233,34 @@ class TestSRIScraperEngine:
         assert xml_bytes is None
         assert error == "RECHAZADA"
         assert fuente is None
+
+    def test_obtener_site_key_consulta_usa_fallback_configurado(self):
+        engine = self._make_engine()
+        engine._settings.recaptcha_sitekey_fallback = "fallback-key"
+        engine._page = AsyncMock()
+        engine._page.evaluate = AsyncMock(return_value=None)
+
+        site_key = asyncio.run(engine._obtener_site_key_consulta())
+
+        assert site_key == "fallback-key"
+
+    def test_obtener_site_key_consulta_usa_sitekey_detectada(self):
+        engine = self._make_engine()
+        engine._page = AsyncMock()
+        engine._page.evaluate = AsyncMock(return_value="detected-key")
+
+        site_key = asyncio.run(engine._obtener_site_key_consulta())
+
+        assert site_key == "detected-key"
+
+    def test_obtener_site_key_consulta_falla_sin_fallback(self):
+        engine = self._make_engine()
+        engine._settings.recaptcha_sitekey_fallback = ""
+        engine._page = AsyncMock()
+        engine._page.evaluate = AsyncMock(return_value=None)
+
+        with pytest.raises(Exception, match="sitekey"):
+            asyncio.run(engine._obtener_site_key_consulta())
 
 
 def test_crear_resolvers_respeta_orden_preferido():

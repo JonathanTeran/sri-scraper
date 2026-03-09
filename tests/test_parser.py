@@ -194,3 +194,76 @@ class TestParseErrors:
         xml = b"<autorizacion><estado>AUTORIZADO</estado></autorizacion>"
         with pytest.raises(ValueError, match="comprobante"):
             parse_comprobante_sri(xml)
+
+    def test_xml_falla_si_falta_ruc_emisor(self):
+        xml = b"""
+        <autorizacion>
+          <estado>AUTORIZADO</estado>
+          <numeroAutorizacion>123</numeroAutorizacion>
+          <fechaAutorizacion>2026-03-08T10:00:00-05:00</fechaAutorizacion>
+          <ambiente>PRODUCCION</ambiente>
+          <comprobante><![CDATA[
+            <factura id="comprobante" version="1.0.0">
+              <infoTributaria>
+                <ambiente>2</ambiente>
+                <tipoEmision>1</tipoEmision>
+                <razonSocial>Demo</razonSocial>
+                <claveAcceso>1234567890123456789012345678901234567890123456789</claveAcceso>
+                <codDoc>01</codDoc>
+                <estab>001</estab>
+                <ptoEmi>001</ptoEmi>
+                <secuencial>000000001</secuencial>
+              </infoTributaria>
+              <infoFactura>
+                <fechaEmision>08/03/2026</fechaEmision>
+                <tipoIdentificacionComprador>05</tipoIdentificacionComprador>
+                <razonSocialComprador>Cliente</razonSocialComprador>
+                <identificacionComprador>1207481803</identificacionComprador>
+                <totalSinImpuestos>10.00</totalSinImpuestos>
+                <totalDescuento>0.00</totalDescuento>
+                <importeTotal>10.00</importeTotal>
+                <moneda>DOLAR</moneda>
+              </infoFactura>
+            </factura>
+          ]]></comprobante>
+        </autorizacion>
+        """
+        with pytest.raises(ValueError, match="infoTributaria.ruc"):
+            parse_comprobante_sri(xml)
+
+    def test_xml_falla_si_importe_total_no_es_numerico(self):
+        xml = b"""
+        <autorizacion>
+          <estado>AUTORIZADO</estado>
+          <numeroAutorizacion>123</numeroAutorizacion>
+          <fechaAutorizacion>2026-03-08T10:00:00-05:00</fechaAutorizacion>
+          <ambiente>PRODUCCION</ambiente>
+          <comprobante><![CDATA[
+            <factura id="comprobante" version="1.0.0">
+              <infoTributaria>
+                <ambiente>2</ambiente>
+                <tipoEmision>1</tipoEmision>
+                <razonSocial>Demo</razonSocial>
+                <ruc>0916429921001</ruc>
+                <claveAcceso>1234567890123456789012345678901234567890123456789</claveAcceso>
+                <codDoc>01</codDoc>
+                <estab>001</estab>
+                <ptoEmi>001</ptoEmi>
+                <secuencial>000000001</secuencial>
+              </infoTributaria>
+              <infoFactura>
+                <fechaEmision>08/03/2026</fechaEmision>
+                <tipoIdentificacionComprador>05</tipoIdentificacionComprador>
+                <razonSocialComprador>Cliente</razonSocialComprador>
+                <identificacionComprador>1207481803</identificacionComprador>
+                <totalSinImpuestos>10.00</totalSinImpuestos>
+                <totalDescuento>0.00</totalDescuento>
+                <importeTotal>ABC</importeTotal>
+                <moneda>DOLAR</moneda>
+              </infoFactura>
+            </factura>
+          ]]></comprobante>
+        </autorizacion>
+        """
+        with pytest.raises(ValueError, match="importeTotal"):
+            parse_comprobante_sri(xml)
