@@ -63,18 +63,46 @@ def build_captcha_attempt_plan(
     native_attempts = 1 if captcha_resolvers else 2
     attempts.extend({"mode": "native"} for _ in range(native_attempts))
 
-    for resolver_info in captcha_resolvers:
-        for variant in PROVIDER_VARIANTS:
-            attempts.append(
-                {
-                    "mode": "provider",
-                    "provider": resolver_info["provider"],
-                    "resolver": resolver_info["resolver"],
-                    **variant,
-                }
-            )
+    def _provider_attempts(variants: tuple[dict, ...]) -> list[dict]:
+        ordered: list[dict] = []
+        for resolver_info in captcha_resolvers:
+            for variant in variants:
+                ordered.append(
+                    {
+                        "mode": "provider",
+                        "provider": resolver_info["provider"],
+                        "resolver": resolver_info["resolver"],
+                        **variant,
+                    }
+                )
+        return ordered
 
     if assist_mode == "fallback" and assisted_available:
+        fast_variants = tuple(
+            variant
+            for variant in PROVIDER_VARIANTS
+            if variant["variant"] in {
+                "enterprise_v3_high",
+                "enterprise_v2_action",
+            }
+        )
+        tail_variants = tuple(
+            variant
+            for variant in PROVIDER_VARIANTS
+            if variant["variant"] not in {
+                "enterprise_v3_high",
+                "enterprise_v2_action",
+            }
+        )
+        attempts.extend(_provider_attempts(fast_variants))
+        attempts.append({"mode": "assisted"})
+        attempts.extend(_provider_attempts(tail_variants))
+    else:
+        attempts.extend(_provider_attempts(PROVIDER_VARIANTS))
+
+    if assist_mode == "fallback" and assisted_available and not any(
+        attempt["mode"] == "assisted" for attempt in attempts
+    ):
         attempts.append({"mode": "assisted"})
 
     if max_attempts is not None:

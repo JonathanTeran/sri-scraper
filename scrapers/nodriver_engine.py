@@ -284,6 +284,8 @@ class SRINodriverEngine:
             "token": token,
             "source": source,
             "action": RECAPTCHA_ACTION,
+            "timeoutMs": max(self._settings.browser_timeout_ms, 45_000),
+            "pollIntervalMs": 500,
         }
         return await self._evaluate_asset(
             "controlled_query.js",
@@ -399,6 +401,14 @@ class SRINodriverEngine:
                 await page.evaluate(
                     """
                     (() => {
+                        if (typeof window.executeRecaptcha === 'function') {
+                            window.executeRecaptcha('consulta_cel_recibidos');
+                            return;
+                        }
+                        if (typeof window.onSubmit === 'function') {
+                            window.onSubmit();
+                            return;
+                        }
                         if (typeof window.rcBuscar === 'function') {
                             window.rcBuscar();
                             return;

@@ -169,7 +169,7 @@ sri-scraper/
 - Las credenciales de los tenants se almacenan encriptadas con Fernet.
 - Los XMLs se guardan tanto en BD como en filesystem (`xmls/{ruc}/{año}/{mes}/`).
 - El worker admite `CAPTCHA_PROVIDER=capsolver|2captcha`, agota variantes SRI por proveedor y encadena ambos si las dos API keys están configuradas.
-- El browser usa perfil persistente por tenant en `chrome_profile/{ruc}` y puede preferir `nodriver` si está disponible.
+- El browser usa perfil persistente por tenant en `chrome_profile/{ruc}`; en VPS se recomienda `BROWSER_PREFER_NODRIVER=false` hasta estabilizar `nodriver`.
 - Se puede enrutar por proxy con `BROWSER_PROXY_SERVER`, `BROWSER_PROXY_USERNAME` y `BROWSER_PROXY_PASSWORD`.
 - El modo asistido se activa con `CAPTCHA_ASSISTED_MODE=fallback|only` y, en Docker, se puede ver por VNC local del worker (`ENABLE_VNC=1` + túnel SSH al puerto `WORKER_VNC_PORT`).
 # sri-scraper

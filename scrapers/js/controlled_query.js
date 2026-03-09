@@ -1,4 +1,10 @@
-async ({ token, source, action }) => {
+async ({
+    token,
+    source,
+    action,
+    timeoutMs = 45000,
+    pollIntervalMs = 500,
+}) => {
     const getSiteKey = () => {
         const iframe = document.querySelector(
             'iframe[src*="recaptcha/enterprise"], '
@@ -39,6 +45,9 @@ async ({ token, source, action }) => {
             messages: msgs ? msgs.innerText.trim() : '',
             panelLen: panel ? panel.innerHTML.length : 0,
             panelHtml: panel ? panel.innerHTML : '',
+            viewStateLen: (
+                document.querySelector('[name="javax.faces.ViewState"]') || {}
+            ).value?.length || 0,
             textareas: Array.from(tas).map((t, i) => ({
                 index: i,
                 len: t.value.length,
@@ -46,10 +55,58 @@ async ({ token, source, action }) => {
             })),
         };
     };
+    const parsePartialResponse = (text) => {
+        if (typeof text !== 'string' || !text.includes('partial-response')) {
+            return null;
+        }
+        try {
+            const parser = new DOMParser();
+            const xml = parser.parseFromString(text, 'application/xml');
+            const updates = Array.from(xml.getElementsByTagName('update'));
+            const payload = {
+                partialResponse: true,
+                updateIds: updates.map((node) => node.getAttribute('id') || ''),
+                panelHtml: '',
+                messages: '',
+                viewState: '',
+            };
+            updates.forEach((node) => {
+                const nodeId = node.getAttribute('id') || '';
+                const value = node.textContent || '';
+                if (
+                    !payload.panelHtml
+                    && (
+                        nodeId.includes('panelListaComprobantes')
+                        || nodeId === 'javax.faces.ViewRoot'
+                    )
+                ) {
+                    payload.panelHtml = value;
+                }
+                if (!payload.messages && nodeId.includes('formMessages')) {
+                    payload.messages = value.replace(/<[^>]+>/g, ' ').trim();
+                }
+                if (nodeId === 'javax.faces.ViewState') {
+                    payload.viewState = value;
+                }
+            });
+            return payload;
+        } catch (_error) {
+            return {
+                partialResponse: true,
+                updateIds: [],
+                panelHtml: '',
+                messages: '',
+                viewState: '',
+            };
+        }
+    };
 
     return await new Promise(async (resolve) => {
         const origRcBuscar = window.rcBuscar;
         const origExecuteRecaptcha = window.executeRecaptcha;
+        const origFetch = window.fetch;
+        const xhrOpen = XMLHttpRequest.prototype.open;
+        const xhrSend = XMLHttpRequest.prototype.send;
         const origEnterpriseExecute = (
             typeof grecaptcha !== 'undefined'
             && grecaptcha.enterprise
@@ -67,8 +124,99 @@ async ({ token, source, action }) => {
         ) ? grecaptcha.enterprise.reset : null;
         let settled = false;
         let timeoutId = null;
+        let pollId = null;
+        let observer = null;
+        let submitted = false;
+        let submitFlow = '';
+        const network = {
+            inFlight: 0,
+            requests: 0,
+            lastStatus: null,
+            lastUrl: '',
+            lastResponseAt: 0,
+            lastResponseSnippet: '',
+            lastError: '',
+            partialResponse: false,
+            partialUpdateIds: [],
+            partialPanelHtml: '',
+            partialMessages: '',
+        };
+
+        const queueIdle = () => {
+            try {
+                return !(
+                    window.PrimeFaces
+                    && PrimeFaces.ajax
+                    && PrimeFaces.ajax.Queue
+                    && typeof PrimeFaces.ajax.Queue.isEmpty === 'function'
+                ) || PrimeFaces.ajax.Queue.isEmpty();
+            } catch (_error) {
+                return true;
+            }
+        };
+
+        const mergeCollectedState = (snapshot) => {
+            const merged = { ...snapshot };
+            if (
+                network.partialPanelHtml
+                && network.partialPanelHtml.length > merged.panelLen
+            ) {
+                merged.panelHtml = network.partialPanelHtml;
+                merged.panelLen = network.partialPanelHtml.length;
+            }
+            if (network.partialMessages) {
+                merged.messages = network.partialMessages;
+            }
+            merged.network = {
+                inFlight: network.inFlight,
+                requests: network.requests,
+                lastStatus: network.lastStatus,
+                lastUrl: network.lastUrl,
+                lastResponseAt: network.lastResponseAt,
+                lastResponseSnippet: network.lastResponseSnippet,
+                lastError: network.lastError,
+                partialResponse: network.partialResponse,
+                partialUpdateIds: network.partialUpdateIds,
+                queueIdle: queueIdle(),
+            };
+            return merged;
+        };
+
+        const shouldFinish = (snapshot) => {
+            const messages = (snapshot.messages || '').toLowerCase();
+            return (
+                snapshot.panelLen > 50
+                || messages.includes('captcha')
+                || messages.includes('no se encontraron')
+                || messages.includes('ha ocurrido un error')
+                || messages.includes('sesión expirada')
+            );
+        };
+
+        const captureResponse = (url, status, text) => {
+            network.lastUrl = url || network.lastUrl;
+            network.lastStatus = status;
+            network.lastResponseAt = Date.now();
+            network.lastResponseSnippet = (text || '').slice(0, 500);
+            const partial = parsePartialResponse(text || '');
+            if (partial) {
+                network.partialResponse = true;
+                network.partialUpdateIds = partial.updateIds;
+                if (partial.panelHtml) {
+                    network.partialPanelHtml = partial.panelHtml;
+                }
+                if (partial.messages) {
+                    network.partialMessages = partial.messages;
+                }
+            }
+        };
 
         const cleanup = () => {
+            if (pollId) clearInterval(pollId);
+            if (observer) observer.disconnect();
+            window.fetch = origFetch;
+            XMLHttpRequest.prototype.open = xhrOpen;
+            XMLHttpRequest.prototype.send = xhrSend;
             if (typeof origRcBuscar === 'function') {
                 window.rcBuscar = origRcBuscar;
             }
@@ -103,26 +251,102 @@ async ({ token, source, action }) => {
             settled = true;
             if (timeoutId) clearTimeout(timeoutId);
             cleanup();
-            resolve({ ...collect(), ...extra });
+            resolve({
+                ...mergeCollectedState(collect()),
+                submitFlow,
+                ...extra,
+            });
         };
 
         const submit = () => {
             if (typeof window.executeRecaptcha === 'function') {
+                submitted = true;
+                submitFlow = 'executeRecaptcha';
                 window.executeRecaptcha(action);
                 return 'executeRecaptcha';
             }
             if (typeof window.rcBuscar === 'function') {
+                submitted = true;
+                submitFlow = 'rcBuscar';
                 window.rcBuscar();
                 return 'rcBuscar';
             }
             if (typeof window.onSubmit === 'function') {
+                submitted = true;
+                submitFlow = 'onSubmit';
                 window.onSubmit();
                 return 'onSubmit';
             }
             return '';
         };
 
+        const isRelevantBody = (body) => (
+            typeof body === 'string'
+            && (
+                body.includes('frmPrincipal')
+                || body.includes('javax.faces.ViewState')
+                || body.includes('javax.faces.partial.ajax=true')
+            )
+        );
+
+        XMLHttpRequest.prototype.open = function(method, url) {
+            this.__codexMethod = method;
+            this.__codexUrl = url;
+            return xhrOpen.apply(this, arguments);
+        };
+        XMLHttpRequest.prototype.send = function(body) {
+            if (
+                String(this.__codexMethod || '').toUpperCase() === 'POST'
+                && isRelevantBody(body)
+            ) {
+                network.requests += 1;
+                network.inFlight += 1;
+                this.addEventListener('loadend', () => {
+                    network.inFlight = Math.max(0, network.inFlight - 1);
+                    captureResponse(
+                        this.responseURL || this.__codexUrl || '',
+                        this.status,
+                        this.responseText || '',
+                    );
+                });
+            }
+            return xhrSend.apply(this, arguments);
+        };
+
+        window.fetch = async function(resource, options = {}) {
+            const url = typeof resource === 'string'
+                ? resource
+                : (resource && resource.url) || '';
+            const method = String(options.method || 'GET').toUpperCase();
+            const body = options.body || '';
+            const relevant = method === 'POST' && isRelevantBody(body);
+            if (relevant) {
+                network.requests += 1;
+                network.inFlight += 1;
+            }
+            try {
+                const response = await origFetch.apply(this, arguments);
+                if (relevant) {
+                    const clone = response.clone();
+                    let text = '';
+                    try {
+                        text = await clone.text();
+                    } catch (_error) {
+                        text = '';
+                    }
+                    captureResponse(clone.url || url, clone.status, text);
+                }
+                return response;
+            } finally {
+                if (relevant) {
+                    network.inFlight = Math.max(0, network.inFlight - 1);
+                }
+            }
+        };
+
         window.rcBuscar = function() {
+            submitted = true;
+            submitFlow = submitFlow || 'rcBuscar';
             try {
                 if (typeof origRcBuscar === 'function') {
                     origRcBuscar.apply(this, arguments);
@@ -131,14 +355,44 @@ async ({ token, source, action }) => {
                 finish({ error: 'rcBuscar:' + err.message });
                 return;
             }
-            setTimeout(() => {
-                finish({ submitFlow: 'rcBuscar' });
-            }, 10000);
         };
 
+        observer = new MutationObserver(() => {
+            const snapshot = mergeCollectedState(collect());
+            if (shouldFinish(snapshot)) {
+                finish();
+            }
+        });
+        observer.observe(document.body, {
+            subtree: true,
+            childList: true,
+            characterData: true,
+        });
+
+        pollId = setInterval(() => {
+            const snapshot = mergeCollectedState(collect());
+            if (shouldFinish(snapshot)) {
+                finish();
+                return;
+            }
+            if (
+                submitted
+                && network.lastResponseAt
+                && Date.now() - network.lastResponseAt > 2000
+                && network.inFlight === 0
+                && queueIdle()
+            ) {
+                if (network.partialResponse || snapshot.messages || snapshot.panelLen > 0) {
+                    finish();
+                }
+            }
+        }, pollIntervalMs);
+
         timeoutId = setTimeout(() => {
-            finish({ error: 'timeout_30s' });
-        }, 30000);
+            finish({
+                error: network.lastResponseAt ? 'timeout_after_submit' : 'timeout_before_submit',
+            });
+        }, timeoutMs);
 
         try {
             let finalToken = token;
@@ -157,6 +411,8 @@ async ({ token, source, action }) => {
                     grecaptcha.enterprise.reset = () => {};
                 }
                 window.executeRecaptcha = function() {
+                    submitted = true;
+                    submitFlow = submitFlow || 'executeRecaptcha';
                     setToken(finalToken);
                     if (typeof origExecuteRecaptcha === 'function') {
                         return origExecuteRecaptcha.apply(this, arguments);

@@ -48,7 +48,9 @@ for key in \
   CAPTCHA_ASSISTED_MODE \
   CAPTCHA_ASSISTED_TIMEOUT_SEC \
   ENABLE_VNC \
-  WORKER_VNC_PORT
+  WORKER_VNC_PORT \
+  BROWSER_PREFER_NODRIVER \
+  BROWSER_TIMEOUT_MS
 do
   value="${!key:-}"
   if [[ -n "${value}" ]]; then

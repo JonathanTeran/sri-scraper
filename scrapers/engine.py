@@ -960,12 +960,11 @@ class SRIScraperEngine:
                 return
 
             post_body = request.post_data or ""
-            # Check if this is the consulta AJAX call carrying the token.
-            # JSF component ids can change between renders, so avoid relying
-            # on a dynamic id such as "j_idt36".
+            intercepted_data["request_url"] = request.url
             is_consulta_post = (
                 "frmPrincipal" in post_body
                 or "javax.faces.ViewState" in post_body
+                or "javax.faces.partial.ajax=true" in post_body
             )
             if is_consulta_post:
                 # Extract the current g-recaptcha-response
@@ -974,9 +973,13 @@ class SRIScraperEngine:
                 token = params.get("g-recaptcha-response", [""])[0]
                 intercepted_data["native_token_len"] = len(token)
                 intercepted_data["has_token"] = bool(token)
+                intercepted_data["primefaces_partial"] = (
+                    params.get("javax.faces.partial.ajax", [""])[0] == "true"
+                )
 
                 self._log.info(
                     "post_interceptado",
+                    url=request.url,
                     has_token=bool(token),
                     token_len=len(token),
                     token_prefix=token[:50] if token else "",
@@ -1007,8 +1010,11 @@ class SRIScraperEngine:
             else:
                 await route.continue_()
 
-        # Set up route interception
-        await page.route("**/*comprobantesRecibidos*", _intercept_post)
+        # Intercept all POSTs during the consulta because the JSF endpoint can
+        # vary while still carrying the same frmPrincipal/ViewState payload.
+        await self._limpiar_route_handler()
+        self._route_handler = _intercept_post
+        await page.route("**/*", self._route_handler)
 
         for intento, attempt in enumerate(attempt_plan, start=1):
             self._log.info(
@@ -1022,6 +1028,8 @@ class SRIScraperEngine:
             intercepted_data.pop("has_token", None)
             intercepted_data.pop("replacement_token", None)
             intercepted_data.pop("post_token_replaced", None)
+            intercepted_data.pop("primefaces_partial", None)
+            intercepted_data.pop("request_url", None)
 
             try:
                 await page.screenshot(
@@ -1121,11 +1129,6 @@ class SRIScraperEngine:
                 if intento >= max_intentos:
                     break
 
-        # Clean up route
-        try:
-            await page.unroute("**/*comprobantesRecibidos*")
-        except Exception:
-            pass
         await self._limpiar_route_handler()
 
         if not captcha_exitoso:
@@ -1244,6 +1247,8 @@ class SRIScraperEngine:
                 "token": token,
                 "source": source,
                 "action": RECAPTCHA_ACTION,
+                "timeoutMs": max(self._settings.browser_timeout_ms, 45_000),
+                "pollIntervalMs": 500,
             },
         )
         return result
@@ -1333,6 +1338,14 @@ class SRIScraperEngine:
                 await page.evaluate(
                     """
                     () => {
+                        if (typeof window.executeRecaptcha === 'function') {
+                            window.executeRecaptcha('consulta_cel_recibidos');
+                            return;
+                        }
+                        if (typeof window.onSubmit === 'function') {
+                            window.onSubmit();
+                            return;
+                        }
                         if (typeof window.rcBuscar === 'function') {
                             window.rcBuscar();
                             return;

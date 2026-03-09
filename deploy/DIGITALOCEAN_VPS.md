@@ -80,6 +80,7 @@ los tokens, habilita VNC local del contenedor y mantén browser visible:
 CAPSOLVER_API_KEY=tu_capsolver \
 TWOCAPTCHA_API_KEY=tu_2captcha \
 CAPTCHA_PROVIDER=capsolver \
+BROWSER_PREFER_NODRIVER=false \
 CAPTCHA_ASSISTED_MODE=fallback \
 ENABLE_VNC=1 \
 bash deploy/deploy.sh
