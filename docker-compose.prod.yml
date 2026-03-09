@@ -117,6 +117,8 @@ services:
       PLAYWRIGHT_HEADLESS: "false"
       ENABLE_VNC: ${ENABLE_VNC:-0}
       VNC_PORT: "5900"
+      CAPTCHA_ASSISTED_MODE: ${CAPTCHA_ASSISTED_MODE:-off}
+      CAPTCHA_ASSISTED_TIMEOUT_SEC: ${CAPTCHA_ASSISTED_TIMEOUT_SEC:-180}
     depends_on:
       postgres:
         condition: service_healthy

@@ -1151,6 +1151,33 @@ class SRIScraperEngine:
             },
         )
 
+        # Diagnose reCAPTCHA setup before attempting
+        try:
+            diag = await page.evaluate(
+                load_js_asset("diagnose_recaptcha.js")
+            )
+            self._log.warning(
+                "recaptcha_diagnostico",
+                site_key=diag.get("siteKey"),
+                site_key_source=diag.get("siteKeySource"),
+                extracted_action=diag.get("extractedAction"),
+                executeRecaptcha_exists=diag.get("executeRecaptchaExists"),
+                executeRecaptcha_src=diag.get("executeRecaptchaSource", "")[:300],
+                rcBuscar_exists=diag.get("rcBuscarExists"),
+                rcBuscar_src=diag.get("rcBuscarSource", "")[:300],
+                onSubmit_exists=diag.get("onSubmitExists"),
+                onSubmit_src=diag.get("onSubmitSource", "")[:300],
+                button_id=diag.get("buttonId"),
+                button_onclick=diag.get("buttonOnclick"),
+                iframe_count=diag.get("iframeCount"),
+                iframe_srcs=diag.get("iframeSrcs"),
+                action_patterns=diag.get("actionPatternsInScripts"),
+                widget_ids=diag.get("widgetIds"),
+                grecaptcha_cfg_keys=diag.get("grecaptchaCfgKeys"),
+            )
+        except Exception as exc:
+            self._log.warning("recaptcha_diagnostico_error", error=str(exc))
+
         max_intentos = 12
         attempt_plan = self._build_captcha_attempt_plan(max_intentos)
         captcha_exitoso = False
@@ -1492,13 +1519,14 @@ class SRIScraperEngine:
         self._log.info(
             "captcha_provider_intento",
             provider=provider,
-            site_key=site_key[:10],
+            site_key=site_key,
             variant=attempt.get("variant"),
             enterprise=attempt.get("enterprise"),
             invisible=attempt.get("invisible"),
             action=attempt.get("action"),
             score=attempt.get("score"),
             page_url_mode=attempt.get("page_url_mode"),
+            page_url=page_url,
         )
         token = await resolver.resolver_token_recaptcha(
             site_key=site_key,
