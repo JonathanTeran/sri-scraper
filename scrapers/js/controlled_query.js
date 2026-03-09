@@ -178,6 +178,10 @@ async ({
             const payload = {
                 partialResponse: true,
                 updateIds: updates.map((node) => node.getAttribute('id') || ''),
+                updates: updates.map((node) => ({
+                    id: node.getAttribute('id') || '',
+                    value: node.textContent || '',
+                })),
                 panelHtml: '',
                 documentsHtml: '',
                 messages: '',
@@ -225,11 +229,53 @@ async ({
             return {
                 partialResponse: true,
                 updateIds: [],
+                updates: [],
                 panelHtml: '',
                 messages: '',
                 viewState: '',
             };
         }
+    };
+    const applyPartialResponseToDom = (partial) => {
+        if (!partial || !Array.isArray(partial.updates)) {
+            return;
+        }
+        partial.updates.forEach(({ id, value }) => {
+            if (!id) {
+                return;
+            }
+            if (id === 'javax.faces.ViewState') {
+                document.querySelectorAll('[name="javax.faces.ViewState"]').forEach((input) => {
+                    input.value = value || '';
+                });
+                return;
+            }
+            const target = document.getElementById(id);
+            if (!target) {
+                return;
+            }
+            const html = value || '';
+            const wrapper = document.createElement('div');
+            wrapper.innerHTML = html.trim();
+            const replacement = wrapper.firstElementChild;
+            if (replacement && replacement.id === id) {
+                target.replaceWith(replacement);
+                return;
+            }
+            if (id.endsWith('_data') || id.includes('formMessages')) {
+                target.innerHTML = html;
+                return;
+            }
+            if (replacement) {
+                target.innerHTML = '';
+                target.appendChild(replacement);
+                while (wrapper.firstChild) {
+                    target.appendChild(wrapper.firstChild);
+                }
+                return;
+            }
+            target.innerHTML = html;
+        });
     };
     const focusResults = (snapshot) => {
         if (window.__codexResultsFocused) {
@@ -453,6 +499,7 @@ async ({
             if (partial) {
                 network.partialResponse = true;
                 network.partialUpdateIds = partial.updateIds;
+                applyPartialResponseToDom(partial);
                 if (partial.panelHtml) {
                     network.partialPanelHtml = partial.panelHtml;
                 }
