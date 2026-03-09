@@ -32,6 +32,29 @@ async ({
         document.querySelectorAll('[name="g-recaptcha-response"]')
             .forEach((el) => { el.value = value || ''; });
     };
+    const getBuscarButton = () => (
+        document.getElementById('frmPrincipal:btnBuscar')
+        || document.querySelector('[id="frmPrincipal:btnBuscar"]')
+        || Array.from(document.querySelectorAll('button,input,a,span'))
+            .find((el) => (el.textContent || el.value || '').trim() === 'Consultar')
+    );
+    const clickBuscarButton = () => {
+        const button = getBuscarButton();
+        if (!button) {
+            return false;
+        }
+        ['mouseover', 'mousedown', 'mouseup', 'click'].forEach((eventName) => {
+            button.dispatchEvent(new MouseEvent(eventName, {
+                bubbles: true,
+                cancelable: true,
+                view: window,
+            }));
+        });
+        if (typeof button.click === 'function') {
+            button.click();
+        }
+        return true;
+    };
     const collect = () => {
         const msgs = document.getElementById('formMessages:messages');
         const panel = document.getElementById(
@@ -45,6 +68,7 @@ async ({
             messages: msgs ? msgs.innerText.trim() : '',
             panelLen: panel ? panel.innerHTML.length : 0,
             panelHtml: panel ? panel.innerHTML : '',
+            hasBuscarButton: !!getBuscarButton(),
             viewStateLen: (
                 document.querySelector('[name="javax.faces.ViewState"]') || {}
             ).value?.length || 0,
@@ -259,6 +283,11 @@ async ({
         };
 
         const submit = () => {
+            if (clickBuscarButton()) {
+                submitted = true;
+                submitFlow = 'button_click';
+                return 'button_click';
+            }
             if (typeof window.executeRecaptcha === 'function') {
                 submitted = true;
                 submitFlow = 'executeRecaptcha';
@@ -414,6 +443,9 @@ async ({
                     submitted = true;
                     submitFlow = submitFlow || 'executeRecaptcha';
                     setToken(finalToken);
+                    if (clickBuscarButton()) {
+                        return true;
+                    }
                     if (typeof origExecuteRecaptcha === 'function') {
                         return origExecuteRecaptcha.apply(this, arguments);
                     }
