@@ -61,6 +61,25 @@ async ({
         }
         return true;
     };
+    const invokePrimeFacesBuscar = () => {
+        const button = getBuscarButton();
+        if (button && typeof window.deshabilitarBoton === 'function') {
+            try {
+                window.deshabilitarBoton(button);
+            } catch (_error) {
+                // Continue even if the UI helper fails.
+            }
+        }
+        if (
+            typeof window.PrimeFaces !== 'undefined'
+            && PrimeFaces.ab
+            && typeof PrimeFaces.ab === 'function'
+        ) {
+            PrimeFaces.ab({ source: 'frmPrincipal:btnBuscar' });
+            return true;
+        }
+        return false;
+    };
     const collect = () => {
         const msgs = document.getElementById('formMessages:messages');
         const panel = document.getElementById(
@@ -363,6 +382,11 @@ async ({
                 submitFlow = 'button_click';
                 return 'button_click';
             }
+            if (invokePrimeFacesBuscar()) {
+                submitted = true;
+                submitFlow = 'primefaces_ab';
+                return 'primefaces_ab';
+            }
             if (typeof window.executeRecaptcha === 'function') {
                 submitted = true;
                 submitFlow = 'executeRecaptcha';
@@ -524,6 +548,9 @@ async ({
                     submitted = true;
                     submitFlow = submitFlow || 'executeRecaptcha';
                     setToken(finalToken);
+                    if (invokePrimeFacesBuscar()) {
+                        return true;
+                    }
                     if (typeof origExecuteRecaptcha === 'function') {
                         return origExecuteRecaptcha.apply(this, arguments);
                     }
