@@ -1,0 +1,191 @@
+x-app-env: &app-env
+  DATABASE_URL: postgresql+asyncpg://sri:${POSTGRES_PASSWORD}@postgres:5432/sri_scraper
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER: redis://redis:6379/0
+  CELERY_BACKEND: redis://redis:6379/1
+  XML_STORAGE_PATH: /app/xmls
+  SCREENSHOT_PATH: /app/screenshots
+  BROWSER_PROFILE_PATH: /app/chrome_profile
+  TZ: America/Guayaquil
+
+x-app-service: &app-service
+  build:
+    context: .
+  env_file:
+    - ${APP_ENV_FILE:-.env.vps}
+  restart: unless-stopped
+  init: true
+  networks:
+    - backend
+  volumes:
+    - ./xmls:/app/xmls
+    - ./screenshots:/app/screenshots
+    - ./sessions:/app/sessions
+    - ./chrome_profile:/app/chrome_profile
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    env_file:
+      - ${APP_ENV_FILE:-.env.vps}
+    environment:
+      POSTGRES_DB: sri_scraper
+      POSTGRES_USER: sri
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: America/Guayaquil
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sri -d sri_scraper"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000"]
+    volumes:
+      - redisdata:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  api:
+    <<: *app-service
+    command:
+      - uvicorn
+      - api.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "${API_WORKERS:-2}"
+    environment:
+      <<: *app-env
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sys, urllib.request; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=5).status == 200 else sys.exit(1)",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  worker:
+    <<: *app-service
+    command: ["bash", "/app/start-worker.sh"]
+    environment:
+      <<: *app-env
+      DISPLAY: :99
+      PLAYWRIGHT_HEADLESS: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    <<: *app-service
+    command:
+      - celery
+      - -A
+      - tasks.celery_app
+      - beat
+      - --loglevel=${CELERY_LOGLEVEL:-info}
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    env_file:
+      - ${APP_ENV_FILE:-.env.vps}
+    environment:
+      API_DOMAIN: ${API_DOMAIN}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  flower:
+    <<: *app-service
+    profiles: ["ops"]
+    command:
+      - celery
+      - -A
+      - tasks.celery_app
+      - flower
+      - --port=5555
+    environment:
+      <<: *app-env
+    ports:
+      - "127.0.0.1:5555:5555"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:
+  caddy_data:
+  caddy_config:
+
+networks:
+  backend:

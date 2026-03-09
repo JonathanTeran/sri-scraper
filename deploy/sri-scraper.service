@@ -1,0 +1,17 @@
+[Unit]
+Description=SRI Scraper Docker Stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=__APP_DIR__
+Environment=APP_ENV_FILE=__APP_DIR__/.env.vps
+ExecStart=/usr/bin/docker compose --env-file __APP_DIR__/.env.vps -f __APP_DIR__/docker-compose.prod.yml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose --env-file __APP_DIR__/.env.vps -f __APP_DIR__/docker-compose.prod.yml down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

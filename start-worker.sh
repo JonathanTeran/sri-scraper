@@ -29,4 +29,7 @@ else
 fi
 
 export DISPLAY=:99
-exec celery -A tasks.celery_app worker --loglevel=info --concurrency=3
+exec celery \
+  -A tasks.celery_app worker \
+  --loglevel="${CELERY_LOGLEVEL:-info}" \
+  --concurrency="${CELERY_WORKER_CONCURRENCY:-3}"

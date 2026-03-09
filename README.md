@@ -43,6 +43,17 @@ curl http://localhost:8000/health
 curl http://localhost:8000/ready
 ```
 
+## Deploy en VPS
+
+Para despliegue en DigitalOcean VPS usa el stack de producción:
+
+```bash
+cp .env.vps.example .env.vps
+bash deploy/deploy.sh
+```
+
+Documentación completa: [deploy/DIGITALOCEAN_VPS.md](/Users/jonathanteran/sri-scraper/deploy/DIGITALOCEAN_VPS.md)
+
 ## Instalación Local (Desarrollo)
 
 ```bash
@@ -136,16 +147,6 @@ curl -X POST http://localhost:8000/api/v1/tenants/{tenant_id}/ejecutar \
   }'
 ```
 
-## Tests
-
-```bash
-# Tests del parser (no requiere DB)
-pytest tests/test_parser.py -v
-
-# Todos los tests
-pytest tests/ -v
-```
-
 ## Estructura del Proyecto
 
 ```
@@ -159,7 +160,6 @@ sri-scraper/
 ├── scrapers/       # Motor Playwright (engine)
 ├── scheduler/      # APScheduler jobs
 ├── tasks/          # Celery tasks
-├── tests/          # Tests con pytest
 └── utils/          # Crypto, delays, screenshots
 ```
 
@@ -173,5 +173,4 @@ sri-scraper/
 - El browser usa perfil persistente por tenant en `chrome_profile/{ruc}` y puede preferir `nodriver` si está disponible.
 - Se puede enrutar por proxy con `BROWSER_PROXY_SERVER`, `BROWSER_PROXY_USERNAME` y `BROWSER_PROXY_PASSWORD`.
 - El modo asistido se activa con `CAPTCHA_ASSISTED_MODE=fallback|only` en ejecuciones con browser visible.
-- Para pruebas manuales de scraping usar `SRI_TEST_RUC`, `SRI_TEST_USUARIO` y `SRI_TEST_PASSWORD` en vez de editar scripts.
 # sri-scraper
