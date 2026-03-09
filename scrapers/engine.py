@@ -2115,12 +2115,16 @@ class SRIScraperEngine:
         assert page is not None
         resultados: list[dict] = []
         pagina_actual = 1
+        next_page_selector = (
+            "a.ui-paginator-next:not(.ui-state-disabled), "
+            "button.ui-paginator-next:not(.ui-state-disabled), "
+            ".rf-ds-btn-next:not(.rf-ds-dis), "
+            "[id$='_ds_next']:not(.rf-ds-dis)"
+        )
 
         # Si debemos reanudar desde una página específica
         while pagina_actual < self._pagina_inicio:
-            next_btn = await page.query_selector(
-                "a.ui-paginator-next:not(.ui-state-disabled)"
-            )
+            next_btn = await page.query_selector(next_page_selector)
             if not next_btn:
                 break
             await next_btn.click()
@@ -2260,9 +2264,7 @@ class SRIScraperEngine:
                     )
 
                 # Intentar siguiente página
-                next_btn = await page.query_selector(
-                    "a.ui-paginator-next:not(.ui-state-disabled)"
-                )
+                next_btn = await page.query_selector(next_page_selector)
                 if not next_btn:
                     self._log.info(
                         "ultima_pagina", pagina=pagina_actual

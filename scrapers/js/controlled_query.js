@@ -231,6 +231,46 @@ async ({
             };
         }
     };
+    const focusResults = (snapshot) => {
+        if (window.__codexResultsFocused) {
+            return;
+        }
+        if (
+            snapshot.panelLen <= 50
+            && snapshot.documentsPanelLen <= 100
+            && snapshot.tableContainerHtmlLen <= 100
+            && snapshot.tableRows <= 0
+            && snapshot.tableHtmlLen <= 100
+        ) {
+            return;
+        }
+        const target = document.getElementById('frmPrincipal:pnldocumentosrecibidos')
+            || document.getElementById('frmPrincipal:tablaCompRecibidos')
+            || document.querySelector("div[id*='tablaCompRecibidos']")
+            || document.querySelector("table[id*='tablaCompRecibidos']")
+            || document.getElementById('frmPrincipal:panelListaComprobantes');
+        if (!target) {
+            return;
+        }
+        window.__codexResultsFocused = true;
+        try {
+            target.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start',
+                inline: 'nearest',
+            });
+            const originalOutline = target.style.outline;
+            const originalOutlineOffset = target.style.outlineOffset;
+            target.style.outline = '3px solid #2563eb';
+            target.style.outlineOffset = '4px';
+            setTimeout(() => {
+                target.style.outline = originalOutline;
+                target.style.outlineOffset = originalOutlineOffset;
+            }, 4000);
+        } catch (_error) {
+            // Ignore visual helper failures.
+        }
+    };
 
     return await new Promise(async (resolve) => {
         const origRcBuscar = window.rcBuscar;
@@ -464,6 +504,7 @@ async ({
             if (settled) return;
             settled = true;
             if (timeoutId) clearTimeout(timeoutId);
+            focusResults(mergeCollectedState(collect()));
             cleanup();
             resolve({
                 ...mergeCollectedState(collect()),
