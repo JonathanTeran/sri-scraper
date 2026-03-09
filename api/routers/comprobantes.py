@@ -177,7 +177,8 @@ async def listar_comprobantes(
     Los resultados se ordenan por fecha de emisión descendente (más recientes primero).
     """
     query = select(Comprobante).where(
-        Comprobante.tenant_id == tenant_id
+        Comprobante.tenant_id == tenant_id,
+        Comprobante.parse_error == False,  # noqa: E712
     )
 
     if tipo:

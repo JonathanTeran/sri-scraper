@@ -390,25 +390,22 @@ def parse_comprobante_sri(xml_bytes: bytes) -> ComprobanteParseado:
     """
     xml_str = xml_bytes.decode("utf-8", errors="replace")
 
-    # Parsear wrapper <autorizacion>
     root = etree.fromstring(xml_bytes)
+    root_tag = root.tag.split("}", 1)[-1] if isinstance(root.tag, str) else ""
 
-    if root.tag != "autorizacion":
-        raise ValueError(
-            f"XML raíz esperado: <autorizacion>, encontrado: <{root.tag}>"
-        )
+    if root_tag == "autorizacion":
+        autorizacion = _parse_autorizacion(root)
 
-    autorizacion = _parse_autorizacion(root)
+        comprobante_el = root.find("comprobante")
+        if comprobante_el is None or not comprobante_el.text:
+            raise ValueError("No se encontró <comprobante> con CDATA")
 
-    # Extraer CDATA del <comprobante>
-    comprobante_el = root.find("comprobante")
-    if comprobante_el is None or not comprobante_el.text:
-        raise ValueError("No se encontró <comprobante> con CDATA")
-
-    comprobante_xml = comprobante_el.text.strip()
-
-    # Parsear el comprobante interior
-    comprobante_root = etree.fromstring(comprobante_xml.encode("utf-8"))
+        comprobante_xml = comprobante_el.text.strip()
+        comprobante_root = etree.fromstring(comprobante_xml.encode("utf-8"))
+    else:
+        # Some download paths can yield the inner comprobante XML directly.
+        autorizacion = InfoAutorizacion()
+        comprobante_root = root
 
     # Eliminar namespaces (ds:Signature, etc.)
     _strip_namespace(comprobante_root)

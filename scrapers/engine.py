@@ -2115,20 +2115,29 @@ class SRIScraperEngine:
     def _extraer_xml_de_soap(
         self, soap_response: str
     ) -> bytes | None:
-        """Extract the comprobante XML from SRI SOAP response."""
+        """Extract the authorized XML payload from SRI SOAP response."""
         from lxml import etree
-        import base64
 
         try:
             root = etree.fromstring(soap_response.encode("utf-8"))
-            # Look for <comprobante> element which contains the XML
-            # The SOAP structure is:
-            # <autorizaciones><autorizacion>
-            #   <comprobante><![CDATA[...XML...]]></comprobante>
-            # </autorizacion></autorizaciones>
+
+            # Prefer the full <autorizacion> wrapper so the parser can keep
+            # estado/numero/fecha/ambiente instead of losing that metadata.
             for elem in root.iter():
-                if elem.tag.endswith("comprobante") \
-                        or elem.tag == "comprobante":
+                tag = elem.tag.split("}")[-1] if isinstance(elem.tag, str) else ""
+                if tag == "autorizacion":
+                    xml_bytes = etree.tostring(
+                        elem,
+                        encoding="utf-8",
+                    )
+                    if xml_bytes:
+                        return xml_bytes
+
+            # Fallback: return the inner comprobante XML if the wrapper is not
+            # present. The parser also tolerates this reduced form.
+            for elem in root.iter():
+                tag = elem.tag.split("}")[-1] if isinstance(elem.tag, str) else ""
+                if tag == "comprobante":
                     text = elem.text
                     if text and text.strip():
                         return text.strip().encode("utf-8")
