@@ -401,6 +401,14 @@ class SRINodriverEngine:
                 await page.evaluate(
                     """
                     (() => {
+                        const tokenField = Array.from(
+                            document.querySelectorAll('[name="g-recaptcha-response"]')
+                        ).find((el) => (el.value || '').length > 100);
+                        const token = tokenField ? tokenField.value : '';
+                        if (token && typeof window.rcBuscar === 'function') {
+                            window.rcBuscar({ 'g-recaptcha-response': token });
+                            return;
+                        }
                         if (typeof window.executeRecaptcha === 'function') {
                             window.executeRecaptcha('consulta_cel_recibidos');
                             return;
@@ -410,7 +418,7 @@ class SRINodriverEngine:
                             return;
                         }
                         if (typeof window.rcBuscar === 'function') {
-                            window.rcBuscar();
+                            window.rcBuscar(token ? { 'g-recaptcha-response': token } : undefined);
                             return;
                         }
                         const btn = document.querySelector(

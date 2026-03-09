@@ -61,6 +61,14 @@ async ({
         }
         return true;
     };
+    const buildCaptchaParams = (value) => {
+        if (!value) {
+            return undefined;
+        }
+        return {
+            'g-recaptcha-response': value,
+        };
+    };
     const invokePrimeFacesBuscar = () => {
         const button = getBuscarButton();
         if (button && typeof window.deshabilitarBoton === 'function') {
@@ -79,6 +87,13 @@ async ({
             return true;
         }
         return false;
+    };
+    const invokeRcBuscar = (value) => {
+        if (typeof window.rcBuscar !== 'function') {
+            return false;
+        }
+        window.rcBuscar(buildCaptchaParams(value));
+        return true;
     };
     const collect = () => {
         const msgs = document.getElementById('formMessages:messages');
@@ -245,6 +260,7 @@ async ({
         let submitted = false;
         let submitFlow = '';
         let submitCount = 0;
+        let finalToken = token;
         const network = {
             inFlight: 0,
             requests: 0,
@@ -464,15 +480,10 @@ async ({
             if (submitCount > 1) {
                 return submitFlow || 'already_submitted';
             }
-            if (clickBuscarButton()) {
+            if (finalToken && invokeRcBuscar(finalToken)) {
                 submitted = true;
-                submitFlow = 'button_click';
-                return 'button_click';
-            }
-            if (invokePrimeFacesBuscar()) {
-                submitted = true;
-                submitFlow = 'primefaces_ab';
-                return 'primefaces_ab';
+                submitFlow = 'rcBuscar';
+                return 'rcBuscar';
             }
             if (typeof window.executeRecaptcha === 'function') {
                 submitted = true;
@@ -491,6 +502,16 @@ async ({
                 submitFlow = 'onSubmit';
                 window.onSubmit();
                 return 'onSubmit';
+            }
+            if (clickBuscarButton()) {
+                submitted = true;
+                submitFlow = 'button_click';
+                return 'button_click';
+            }
+            if (invokePrimeFacesBuscar()) {
+                submitted = true;
+                submitFlow = 'primefaces_ab';
+                return 'primefaces_ab';
             }
             return '';
         };
@@ -638,8 +659,6 @@ async ({
         }, timeoutMs);
 
         try {
-            let finalToken = token;
-
             if (finalToken) {
                 window.__captchaToken = finalToken;
                 setToken(finalToken);
@@ -657,17 +676,20 @@ async ({
                     submitted = true;
                     submitFlow = submitFlow || 'executeRecaptcha';
                     setToken(finalToken);
-                    if (invokePrimeFacesBuscar()) {
+                    if (invokeRcBuscar(finalToken)) {
                         return true;
                     }
                     if (typeof origExecuteRecaptcha === 'function') {
                         return origExecuteRecaptcha.apply(this, arguments);
                     }
                     if (typeof window.rcBuscar === 'function') {
-                        return window.rcBuscar();
+                        return window.rcBuscar(buildCaptchaParams(finalToken));
                     }
                     if (typeof window.onSubmit === 'function') {
                         return window.onSubmit();
+                    }
+                    if (invokePrimeFacesBuscar()) {
+                        return true;
                     }
                     if (clickBuscarButton()) {
                         return true;

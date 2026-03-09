@@ -1623,6 +1623,14 @@ class SRIScraperEngine:
                 await page.evaluate(
                     """
                     () => {
+                        const tokenField = Array.from(
+                            document.querySelectorAll('[name="g-recaptcha-response"]')
+                        ).find((el) => (el.value || '').length > 100);
+                        const token = tokenField ? tokenField.value : '';
+                        if (token && typeof window.rcBuscar === 'function') {
+                            window.rcBuscar({ 'g-recaptcha-response': token });
+                            return;
+                        }
                         if (typeof window.executeRecaptcha === 'function') {
                             window.executeRecaptcha('consulta_cel_recibidos');
                             return;
@@ -1632,7 +1640,7 @@ class SRIScraperEngine:
                             return;
                         }
                         if (typeof window.rcBuscar === 'function') {
-                            window.rcBuscar();
+                            window.rcBuscar(token ? { 'g-recaptcha-response': token } : undefined);
                             return;
                         }
                         const btn = document.querySelector(
@@ -2336,11 +2344,10 @@ class SRIScraperEngine:
                 window.executeRecaptcha = function(action) {{
                     document.querySelectorAll('[name="g-recaptcha-response"]')
                         .forEach(el => {{ el.value = token; }});
-                    // Call onSubmit → rcBuscar (the native callback chain)
-                    if (typeof onSubmit === 'function') {{
+                    if (typeof rcBuscar === 'function') {{
+                        rcBuscar({{ 'g-recaptcha-response': token }});
+                    }} else if (typeof onSubmit === 'function') {{
                         onSubmit();
-                    }} else if (typeof rcBuscar === 'function') {{
-                        rcBuscar();
                     }}
                 }};
             }}
