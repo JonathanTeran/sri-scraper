@@ -1591,7 +1591,7 @@ class SRIScraperEngine:
                 const banner = document.createElement('div');
                 banner.id = 'codex-captcha-assist';
                 banner.innerText =
-                    'Modo asistido activo. Complete el captcha y presione Consultar. '
+                    'Modo asistido activo. Complete el captcha y use el boton Consultar del portal. '
                     + 'La espera termina en ' + timeoutSec + ' segundos.';
                 Object.assign(banner.style, {
                     position: 'fixed',
@@ -1612,7 +1612,6 @@ class SRIScraperEngine:
             {"timeoutSec": timeout_sec},
         )
 
-        auto_submitted = False
         deadline = asyncio.get_running_loop().time() + timeout_sec
         while asyncio.get_running_loop().time() < deadline:
             result = await page.evaluate(
@@ -1622,14 +1621,46 @@ class SRIScraperEngine:
                     const panel = document.getElementById(
                         'frmPrincipal:panelListaComprobantes'
                     );
+                    const documentsPanel = document.getElementById(
+                        'frmPrincipal:pnldocumentosrecibidos'
+                    );
+                    const tableContainer =
+                        document.getElementById('frmPrincipal:tablaCompRecibidos')
+                        || document.getElementById('frmPrincipal:pnldocumentosrecibidos');
+                    const tableBody =
+                        document.getElementById('frmPrincipal:tablaCompRecibidos_data')
+                        || document.querySelector('[id="frmPrincipal:tablaCompRecibidos_data"]');
+                    const table =
+                        (tableBody && tableBody.closest('table'))
+                        || (tableContainer && tableContainer.querySelector('table'))
+                        || null;
                     const tas = document.querySelectorAll(
                         '[name="g-recaptcha-response"]'
                     );
+                    const rowCount = tableBody
+                        ? Array.from(tableBody.querySelectorAll('tr')).filter(
+                            (row) => (row.textContent || '').trim().length > 0
+                        ).length
+                        : (table
+                            ? Array.from(table.querySelectorAll('tbody tr')).filter(
+                                (row) => (row.textContent || '').trim().length > 0
+                            ).length
+                            : 0);
                     return {
                         source: 'assisted',
                         messages: msgs ? msgs.innerText.trim() : '',
                         panelLen: panel ? panel.innerHTML.length : 0,
                         panelHtml: panel ? panel.innerHTML : '',
+                        documentsPanelLen: documentsPanel ? documentsPanel.innerHTML.length : 0,
+                        documentsPanelHtml: documentsPanel ? documentsPanel.innerHTML : '',
+                        tableContainerId: tableContainer ? (tableContainer.id || '') : '',
+                        tableContainerHtmlLen: tableContainer ? tableContainer.innerHTML.length : 0,
+                        tableContainerHtml: tableContainer ? tableContainer.innerHTML : '',
+                        tableId: table ? (table.id || '') : '',
+                        tableBodyId: tableBody ? (tableBody.id || '') : '',
+                        tableRows: rowCount,
+                        tableHtmlLen: table ? table.outerHTML.length : 0,
+                        tableHtml: table ? table.outerHTML : '',
                         textareas: Array.from(tas).map((t, i) => ({
                             index: i,
                             len: t.value.length,
@@ -1639,45 +1670,15 @@ class SRIScraperEngine:
                 }
                 """
             )
-            if result.get("panelLen", 0) > 50:
+            if (
+                result.get("panelLen", 0) > 50
+                or result.get("documentsPanelLen", 0) > 100
+                or result.get("tableContainerHtmlLen", 0) > 100
+                or result.get("tableRows", 0) > 0
+                or result.get("tableHtmlLen", 0) > 100
+                or "captcha" in result.get("messages", "").lower()
+            ):
                 return result
-
-            token_present = any(
-                item.get("len", 0) > 100
-                for item in result.get("textareas", [])
-            )
-            if token_present and not auto_submitted:
-                auto_submitted = True
-                await page.evaluate(
-                    """
-                    () => {
-                        const tokenField = Array.from(
-                            document.querySelectorAll('[name="g-recaptcha-response"]')
-                        ).find((el) => (el.value || '').length > 100);
-                        const token = tokenField ? tokenField.value : '';
-                        if (token && typeof window.rcBuscar === 'function') {
-                            window.rcBuscar({ 'g-recaptcha-response': token });
-                            return;
-                        }
-                        if (typeof window.executeRecaptcha === 'function') {
-                            window.executeRecaptcha('consulta_cel_recibidos');
-                            return;
-                        }
-                        if (typeof window.onSubmit === 'function') {
-                            window.onSubmit();
-                            return;
-                        }
-                        if (typeof window.rcBuscar === 'function') {
-                            window.rcBuscar(token ? { 'g-recaptcha-response': token } : undefined);
-                            return;
-                        }
-                        const btn = document.querySelector(
-                            '[id="frmPrincipal:btnBuscar"]'
-                        );
-                        if (btn) btn.click();
-                    }
-                    """
-                )
 
             await asyncio.sleep(2)
 
