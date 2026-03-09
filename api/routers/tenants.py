@@ -12,6 +12,7 @@ from api.dependencies import get_db, get_settings_dep
 from config.settings import Settings
 from db.models.tenant import Tenant
 from scrapers.credential_validator import validar_credenciales_sri
+from tasks.constants import normalize_tipo_comprobante
 from utils.crypto import decrypt, encrypt
 
 router = APIRouter()
@@ -353,13 +354,18 @@ async def ejecutar_scraping(
     if not tenant.activo:
         raise HTTPException(400, "Tenant desactivado")
 
+    try:
+        tipo_canonico = normalize_tipo_comprobante(data.tipo_comprobante)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
     from tasks.scrape_tasks import scrape_tenant_periodo
 
     task = scrape_tenant_periodo.delay(
         str(tenant_id),
         data.anio,
         data.mes,
-        data.tipo_comprobante,
+        tipo_canonico,
     )
     return {
         "message": "Scraping encolado",

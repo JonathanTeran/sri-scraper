@@ -33,7 +33,11 @@ from scrapers.exceptions import (
 )
 from tasks.async_runner import run_async
 from tasks.celery_app import celery_app
-from tasks.constants import TIPOS_SCRAPING, TIPO_MAP
+from tasks.constants import (
+    TIPOS_SCRAPING,
+    TIPO_MAP,
+    normalize_tipo_comprobante,
+)
 from utils.crypto import decrypt
 from utils.time import utc_now, utc_today
 from utils.xml_storage import build_xml_storage_path
@@ -316,6 +320,7 @@ async def _scrape_tenant_periodo_async(
 ) -> dict:
     """Implementación async de la tarea de scraping."""
     async_session = _get_async_session()
+    tipo_canonico = normalize_tipo_comprobante(tipo_comprobante)
 
     async with async_session() as session:
         # Cargar tenant
@@ -348,7 +353,7 @@ async def _scrape_tenant_periodo_async(
                 tenant_id=tenant_uuid,
                 periodo_anio=anio,
                 periodo_mes=mes,
-                tipo_comprobante=TIPO_MAP.get(tipo_comprobante, tipo_comprobante),
+                tipo_comprobante=TIPO_MAP.get(tipo_canonico, tipo_canonico),
                 estado=EstadoEjecucion.INICIADO,
             )
             session.add(ej_log)
@@ -439,7 +444,7 @@ async def _scrape_tenant_periodo_async(
             tenant_password=password,
             periodo_anio=anio,
             periodo_mes=mes,
-            tipo_comprobante=tipo_comprobante,
+            tipo_comprobante=tipo_canonico,
             settings=settings,
             pagina_inicio=pagina_inicio,
             on_page_processed=_persistir_pagina,
@@ -466,7 +471,7 @@ async def _scrape_tenant_periodo_async(
         return {
             "tenant_id": tenant_id,
             "periodo": f"{anio}-{mes:02d}",
-            "tipo": tipo_comprobante,
+            "tipo": tipo_canonico,
             "total_encontrados": resultado.total_encontrados,
             "total_nuevos": total_nuevos,
             "total_errores": total_errores,
