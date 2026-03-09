@@ -1627,38 +1627,20 @@ class SRIScraperEngine:
                 const setStatus = (text) => {
                     if (statusEl) statusEl.textContent = text || '';
                 };
-                const findToken = () => {
-                    const tokenField = Array.from(
-                        document.querySelectorAll('[name="g-recaptcha-response"]')
-                    ).find((el) => (el.value || '').length > 100);
-                    return tokenField ? tokenField.value : '';
-                };
                 const assistedSubmit = () => {
-                    const token = findToken();
-                    if (!token) {
+                    const tokenReady = Array.from(
+                        document.querySelectorAll('[name="g-recaptcha-response"]')
+                    ).some((el) => (el.value || '').length > 100);
+                    if (!tokenReady) {
                         setStatus('Todavia no se detecta token de captcha.');
                         return false;
                     }
-                    if (typeof window.rcBuscar === 'function') {
-                        setStatus('Enviando consulta asistida...');
-                        window.rcBuscar({ 'g-recaptcha-response': token });
-                        return true;
-                    }
-                    if (typeof window.onSubmit === 'function') {
-                        setStatus('Enviando via onSubmit...');
-                        window.onSubmit();
-                        return true;
-                    }
-                    const btn = document.querySelector('[id="frmPrincipal:btnBuscar"]');
-                    if (btn) {
-                        setStatus('Enviando via click del boton...');
-                        btn.click();
-                        return true;
-                    }
-                    setStatus('No se encontro un flujo de envio disponible.');
-                    return false;
+                    window.__codexAssistedSubmitRequested = true;
+                    setStatus('Solicitud enviada al backend. Espere respuesta...');
+                    return true;
                 };
 
+                window.__codexAssistedSubmitRequested = false;
                 window.__codexAssistedSubmit = assistedSubmit;
                 const helperBtn = document.getElementById('codex-captcha-assist-submit');
                 if (helperBtn) {
@@ -1705,6 +1687,9 @@ class SRIScraperEngine:
                     const tas = document.querySelectorAll(
                         '[name="g-recaptcha-response"]'
                     );
+                    const tokenField = Array.from(tas).find(
+                        (el) => (el.value || '').length > 100
+                    );
                     const rowCount = tableBody
                         ? Array.from(tableBody.querySelectorAll('tr')).filter(
                             (row) => (row.textContent || '').trim().length > 0
@@ -1729,6 +1714,8 @@ class SRIScraperEngine:
                         tableRows: rowCount,
                         tableHtmlLen: table ? table.outerHTML.length : 0,
                         tableHtml: table ? table.outerHTML : '',
+                        tokenReady: Boolean(tokenField),
+                        submitRequested: Boolean(window.__codexAssistedSubmitRequested),
                         textareas: Array.from(tas).map((t, i) => ({
                             index: i,
                             len: t.value.length,
@@ -1747,6 +1734,28 @@ class SRIScraperEngine:
                 or "captcha" in result.get("messages", "").lower()
             ):
                 return result
+
+            if result.get("submitRequested"):
+                token = await page.evaluate(
+                    """
+                    () => {
+                        const tokenField = Array.from(
+                            document.querySelectorAll('[name="g-recaptcha-response"]')
+                        ).find((el) => (el.value || '').length > 100);
+                        window.__codexAssistedSubmitRequested = false;
+                        return tokenField ? tokenField.value : '';
+                    }
+                    """
+                )
+                if len(token) > 100:
+                    self._log.info(
+                        "captcha_asistido_submit_backend",
+                        token_len=len(token),
+                    )
+                    return await self._ejecutar_consulta_controlada(
+                        token=token,
+                        source="assisted",
+                    )
 
             await asyncio.sleep(2)
 
