@@ -527,6 +527,7 @@ class SRINodriverEngine:
         max_intentos = 12
         attempt_plan = self._build_captcha_attempt_plan(max_intentos)
         captcha_exitoso = False
+        sin_datos_detectado = False
         panel_html = ""
         msgs = ""
 
@@ -577,6 +578,7 @@ class SRINodriverEngine:
             msgs = query_result.get("messages", "").lower()
             panel_len = query_result.get("panelLen", 0)
             error = query_result.get("error")
+            empty_partial = bool(query_result.get("emptyPartialResponse"))
 
             if panel_len > 50:
                 panel_html = query_result.get("panelHtml", "")
@@ -606,8 +608,16 @@ class SRINodriverEngine:
                 await asyncio.sleep(2)
                 continue
 
-            self._log.info("sin_datos", intento=intento)
-            await asyncio.sleep(2)
+            sin_datos_detectado = True
+            self._log.info(
+                "sin_datos",
+                intento=intento,
+                empty_partial=empty_partial,
+            )
+            break
+
+        if sin_datos_detectado:
+            return 0
 
         if not captcha_exitoso:
             if "no se encontraron" in msgs:

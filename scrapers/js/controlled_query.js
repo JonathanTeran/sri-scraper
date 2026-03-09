@@ -43,15 +43,21 @@ async ({
         if (!button) {
             return false;
         }
-        ['mouseover', 'mousedown', 'mouseup', 'click'].forEach((eventName) => {
-            button.dispatchEvent(new MouseEvent(eventName, {
+        if (button.__codexClicked) {
+            return true;
+        }
+        button.__codexClicked = true;
+        if (typeof button.focus === 'function') {
+            button.focus();
+        }
+        if (typeof button.click === 'function') {
+            button.click();
+        } else {
+            button.dispatchEvent(new MouseEvent('click', {
                 bubbles: true,
                 cancelable: true,
                 view: window,
             }));
-        });
-        if (typeof button.click === 'function') {
-            button.click();
         }
         return true;
     };
@@ -152,6 +158,7 @@ async ({
         let observer = null;
         let submitted = false;
         let submitFlow = '';
+        let submitCount = 0;
         const network = {
             inFlight: 0,
             requests: 0,
@@ -203,6 +210,20 @@ async ({
                 partialUpdateIds: network.partialUpdateIds,
                 queueIdle: queueIdle(),
             };
+            const emptyPartialIds = new Set([
+                'formMessages:messages',
+                'javax.faces.ViewState',
+            ]);
+            merged.emptyPartialResponse = Boolean(
+                merged.panelLen === 0
+                && !(merged.messages || '').trim()
+                && merged.network.partialResponse
+                && merged.network.lastStatus === 200
+                && merged.network.partialUpdateIds.length > 0
+                && merged.network.partialUpdateIds.every(
+                    (id) => emptyPartialIds.has(id)
+                )
+            );
             return merged;
         };
 
@@ -214,6 +235,7 @@ async ({
                 || messages.includes('no se encontraron')
                 || messages.includes('ha ocurrido un error')
                 || messages.includes('sesión expirada')
+                || snapshot.emptyPartialResponse
             );
         };
 
@@ -283,6 +305,13 @@ async ({
         };
 
         const submit = () => {
+            if (submitted) {
+                return submitFlow || 'already_submitted';
+            }
+            submitCount += 1;
+            if (submitCount > 1) {
+                return submitFlow || 'already_submitted';
+            }
             if (clickBuscarButton()) {
                 submitted = true;
                 submitFlow = 'button_click';
@@ -443,17 +472,17 @@ async ({
                     submitted = true;
                     submitFlow = submitFlow || 'executeRecaptcha';
                     setToken(finalToken);
-                    if (clickBuscarButton()) {
-                        return true;
-                    }
                     if (typeof origExecuteRecaptcha === 'function') {
                         return origExecuteRecaptcha.apply(this, arguments);
+                    }
+                    if (typeof window.rcBuscar === 'function') {
+                        return window.rcBuscar();
                     }
                     if (typeof window.onSubmit === 'function') {
                         return window.onSubmit();
                     }
-                    if (typeof window.rcBuscar === 'function') {
-                        return window.rcBuscar();
+                    if (clickBuscarButton()) {
+                        return true;
                     }
                 };
             } else if (

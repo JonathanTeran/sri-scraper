@@ -946,6 +946,7 @@ class SRIScraperEngine:
         max_intentos = 12
         attempt_plan = self._build_captcha_attempt_plan(max_intentos)
         captcha_exitoso = False
+        sin_datos_detectado = False
         html_content = ""
         msgs = ""
 
@@ -1091,6 +1092,7 @@ class SRIScraperEngine:
             msgs = result.get("messages", "").lower()
             panel_len = result.get("panelLen", 0)
             error = result.get("error")
+            empty_partial = bool(result.get("emptyPartialResponse"))
 
             if panel_len > 50:
                 html_content = result.get("panelHtml", "")
@@ -1124,12 +1126,19 @@ class SRIScraperEngine:
                 await delay_humano(3000, 5000)
                 continue
             else:
-                self._log.info("sin_datos", intento=intento)
-                await delay_humano(3000, 5000)
-                if intento >= max_intentos:
-                    break
+                sin_datos_detectado = True
+                self._log.info(
+                    "sin_datos",
+                    intento=intento,
+                    empty_partial=empty_partial,
+                    request_url=intercepted_data.get("request_url"),
+                )
+                break
 
         await self._limpiar_route_handler()
+
+        if sin_datos_detectado:
+            return 0
 
         if not captcha_exitoso:
             if "no se encontraron" in msgs:
