@@ -1193,17 +1193,31 @@ class SRIScraperEngine:
                 await route.continue_()
                 return
 
-            post_body = request.post_data or ""
-            intercepted_data["request_url"] = request.url
-            is_consulta_post = (
-                "frmPrincipal" in post_body
-                or "javax.faces.ViewState" in post_body
-                or "javax.faces.partial.ajax=true" in post_body
-            )
-            if is_consulta_post:
-                # Extract the current g-recaptcha-response
+            continued = False
+            try:
+                post_body_bytes = request.post_data_buffer or b""
+                intercepted_data["request_url"] = request.url
+                is_consulta_post = (
+                    b"frmPrincipal" in post_body_bytes
+                    or b"javax.faces.ViewState" in post_body_bytes
+                    or b"javax.faces.partial.ajax=true" in post_body_bytes
+                )
+                if not is_consulta_post:
+                    await route.continue_()
+                    continued = True
+                    return
+
+                # JSF form submissions are URL-encoded text, but unrelated POSTs can
+                # contain binary payloads that Playwright cannot decode as UTF-8.
                 import urllib.parse
-                params = urllib.parse.parse_qs(post_body)
+
+                post_body = post_body_bytes.decode("utf-8", errors="replace")
+                params = urllib.parse.parse_qs(
+                    post_body,
+                    keep_blank_values=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
                 token = params.get("g-recaptcha-response", [""])[0]
                 intercepted_data["native_token_len"] = len(token)
                 intercepted_data["has_token"] = bool(token)
@@ -1251,7 +1265,7 @@ class SRIScraperEngine:
                     keys=intercepted_data["posted_keys"],
                 )
 
-                # If we have a replacement token, swap it
+                # Only rewrite the body when we actually swap in a solver/manual token.
                 replacement = intercepted_data.get("replacement_token")
                 if replacement and token != replacement:
                     encoded_replacement = urllib.parse.quote_plus(
@@ -1271,9 +1285,24 @@ class SRIScraperEngine:
                     intercepted_data["native_token_len"] = len(replacement)
                     intercepted_data["has_token"] = True
                     self._log.info("token_reemplazado_en_post")
+                    await route.continue_(post_data=post_body)
+                    continued = True
+                    return
 
-                await route.continue_(post_data=post_body)
-            else:
+                await route.continue_()
+                continued = True
+            except Exception as exc:
+                self._log.warning(
+                    "post_interceptado_error",
+                    error=str(exc),
+                    url=request.url,
+                )
+                if not continued:
+                    await route.continue_()
+                    continued = True
+                return
+
+            if not continued:
                 await route.continue_()
 
         # Intercept all POSTs during the consulta because the JSF endpoint can
