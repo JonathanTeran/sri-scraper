@@ -751,6 +751,10 @@ class SRINodriverEngine:
             table_html_len = query_result.get("tableHtmlLen", 0)
             error = query_result.get("error")
             empty_partial = bool(query_result.get("emptyPartialResponse"))
+            has_token = any(
+                (item.get("len") or 0) > 0
+                for item in query_result.get("textareas", [])
+            )
 
             if panel_len > 50 or table_rows > 0 or table_html_len > 100:
                 panel_html = (
@@ -768,6 +772,17 @@ class SRINodriverEngine:
                 )
                 if attempt["mode"] == "provider":
                     await attempt["resolver"].reportar_token_malo()
+                await self._resetear_recaptcha()
+                await asyncio.sleep(2)
+                continue
+            if empty_partial:
+                self._log.warning(
+                    "respuesta_parcial_vacia",
+                    intento=intento,
+                    provider=attempt.get("provider"),
+                    variant=attempt.get("variant"),
+                    has_token=has_token,
+                )
                 await self._resetear_recaptcha()
                 await asyncio.sleep(2)
                 continue

@@ -1335,6 +1335,7 @@ class SRIScraperEngine:
             table_html_len = result.get("tableHtmlLen", 0)
             error = result.get("error")
             empty_partial = bool(result.get("emptyPartialResponse"))
+            has_token = bool(intercepted_data.get("has_token"))
 
             if panel_len > 50 or table_rows > 0 or table_html_len > 100:
                 html_content = (
@@ -1363,6 +1364,19 @@ class SRIScraperEngine:
                     await attempt["resolver"].reportar_token_malo()
                 await self._resetear_recaptcha()
                 await delay_humano(5000, 10000)
+                continue
+            elif empty_partial:
+                self._log.warning(
+                    "respuesta_parcial_vacia",
+                    intento=intento,
+                    provider=attempt.get("provider"),
+                    variant=attempt.get("variant"),
+                    has_token=has_token,
+                    request_url=intercepted_data.get("request_url"),
+                    posted_filters=intercepted_data.get("posted_filters"),
+                )
+                await self._resetear_recaptcha()
+                await delay_humano(3000, 5000)
                 continue
             elif error:
                 self._log.warning(

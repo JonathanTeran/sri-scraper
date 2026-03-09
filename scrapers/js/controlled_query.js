@@ -85,17 +85,31 @@ async ({
         const panel = document.getElementById(
             'frmPrincipal:panelListaComprobantes'
         );
+        const documentsPanel = document.getElementById(
+            'frmPrincipal:pnldocumentosrecibidos'
+        );
         const table = document.querySelector(
             "table[id*='tablaCompRecibidos'], "
             + "table[id*='tablaComprobantes'], "
             + "table[id*='tblComprobantes'], "
             + "table[id*='dataTable']"
         );
+        const tableBody = document.querySelector(
+            "tbody[id*='tablaCompRecibidos_data'], "
+            + "tbody[id*='tablaComprobantes_data'], "
+            + "tbody[id*='tblComprobantes_data']"
+        );
         const rows = table
             ? Array.from(table.querySelectorAll('tbody tr')).filter(
                 (row) => row.querySelectorAll('td').length >= 3
             )
-            : [];
+            : (
+                tableBody
+                    ? Array.from(tableBody.querySelectorAll('tr')).filter(
+                        (row) => row.querySelectorAll('td').length >= 3
+                    )
+                    : []
+            );
         const paginator = document.querySelector(
             ".ui-paginator-current, .ui-paginator-pages, "
             + "[id*='paginator'], [class*='paginator']"
@@ -108,7 +122,10 @@ async ({
             messages: msgs ? msgs.innerText.trim() : '',
             panelLen: panel ? panel.innerHTML.length : 0,
             panelHtml: panel ? panel.innerHTML : '',
+            documentsPanelLen: documentsPanel ? documentsPanel.innerHTML.length : 0,
+            documentsPanelHtml: documentsPanel ? documentsPanel.innerHTML : '',
             tableId: table ? (table.id || '') : '',
+            tableBodyId: tableBody ? (tableBody.id || '') : '',
             tableRows: rows.length,
             tableHtmlLen: table ? table.outerHTML.length : 0,
             tableHtml: table ? table.outerHTML : '',
@@ -136,6 +153,7 @@ async ({
                 partialResponse: true,
                 updateIds: updates.map((node) => node.getAttribute('id') || ''),
                 panelHtml: '',
+                documentsHtml: '',
                 messages: '',
                 viewState: '',
             };
@@ -146,10 +164,28 @@ async ({
                     !payload.panelHtml
                     && (
                         nodeId.includes('panelListaComprobantes')
+                        || nodeId.includes('pnldocumentosrecibidos')
+                        || nodeId.includes('tablaCompRecibidos')
+                        || nodeId.includes('tablaCompRecibidos_data')
+                        || nodeId.includes('tablaComprobantes')
+                        || nodeId.includes('tblComprobantes')
                         || nodeId === 'javax.faces.ViewRoot'
                     )
                 ) {
                     payload.panelHtml = value;
+                }
+                if (
+                    !payload.documentsHtml
+                    && (
+                        nodeId.includes('pnldocumentosrecibidos')
+                        || nodeId.includes('tablaCompRecibidos')
+                        || nodeId.includes('tablaCompRecibidos_data')
+                        || nodeId.includes('tablaComprobantes')
+                        || nodeId.includes('tblComprobantes')
+                        || nodeId === 'javax.faces.ViewRoot'
+                    )
+                ) {
+                    payload.documentsHtml = value;
                 }
                 if (!payload.messages && nodeId.includes('formMessages')) {
                     payload.messages = value.replace(/<[^>]+>/g, ' ').trim();
@@ -209,6 +245,7 @@ async ({
             partialResponse: false,
             partialUpdateIds: [],
             partialPanelHtml: '',
+            partialDocumentsHtml: '',
             partialMessages: '',
         };
 
@@ -235,12 +272,22 @@ async ({
                 merged.panelLen = network.partialPanelHtml.length;
             }
             if (
+                merged.documentsPanelLen === 0
+                && network.partialDocumentsHtml
+            ) {
+                merged.documentsPanelHtml = network.partialDocumentsHtml;
+                merged.documentsPanelLen = network.partialDocumentsHtml.length;
+            }
+            if (
                 merged.tableRows === 0
                 && merged.tableHtmlLen === 0
-                && network.partialPanelHtml
+                && (network.partialDocumentsHtml || network.partialPanelHtml)
             ) {
                 const container = document.createElement('div');
-                container.innerHTML = network.partialPanelHtml;
+                container.innerHTML = (
+                    network.partialDocumentsHtml
+                    || network.partialPanelHtml
+                );
                 const partialTable = container.querySelector(
                     "table[id*='tablaCompRecibidos'], "
                     + "table[id*='tablaComprobantes'], "
@@ -294,13 +341,13 @@ async ({
             const messages = (snapshot.messages || '').toLowerCase();
             return (
                 snapshot.panelLen > 50
+                || snapshot.documentsPanelLen > 100
                 || snapshot.tableRows > 0
                 || snapshot.tableHtmlLen > 100
                 || messages.includes('captcha')
                 || messages.includes('no se encontraron')
                 || messages.includes('ha ocurrido un error')
                 || messages.includes('sesión expirada')
-                || snapshot.emptyPartialResponse
             );
         };
 
@@ -315,6 +362,9 @@ async ({
                 network.partialUpdateIds = partial.updateIds;
                 if (partial.panelHtml) {
                     network.partialPanelHtml = partial.panelHtml;
+                }
+                if (partial.documentsHtml) {
+                    network.partialDocumentsHtml = partial.documentsHtml;
                 }
                 if (partial.messages) {
                     network.partialMessages = partial.messages;
@@ -506,7 +556,7 @@ async ({
             if (
                 submitted
                 && network.lastResponseAt
-                && Date.now() - network.lastResponseAt > 2000
+                && Date.now() - network.lastResponseAt > 4000
                 && network.inFlight === 0
                 && queueIdle()
             ) {
@@ -514,11 +564,32 @@ async ({
                     network.partialResponse
                     || snapshot.messages
                     || snapshot.panelLen > 0
+                    || snapshot.documentsPanelLen > 100
                     || snapshot.tableRows > 0
                     || snapshot.tableHtmlLen > 100
                 ) {
                     finish();
+                    return;
                 }
+            }
+            if (
+                submitted
+                && snapshot.emptyPartialResponse
+                && network.lastResponseAt
+                && Date.now() - network.lastResponseAt > 8000
+                && network.inFlight === 0
+                && queueIdle()
+            ) {
+                finish();
+                return;
+            }
+            if (
+                submitted
+                && !network.lastResponseAt
+                && snapshot.documentsPanelLen > 100
+            ) {
+                finish();
+                return;
             }
         }, pollIntervalMs);
 
