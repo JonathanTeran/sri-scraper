@@ -2147,13 +2147,45 @@ class SRIScraperEngine:
         next_page_selector = (
             "a.ui-paginator-next:not(.ui-state-disabled), "
             "button.ui-paginator-next:not(.ui-state-disabled), "
+            "span.ui-paginator-next:not(.ui-state-disabled), "
             ".rf-ds-btn-next:not(.rf-ds-dis), "
             "[id$='_ds_next']:not(.rf-ds-dis)"
         )
 
+        async def _obtener_tabla_resultados():
+            return await page.query_selector(
+                "[id='frmPrincipal:tablaCompRecibidos'], "
+                "[id='frmPrincipal:panelListaComprobantes'], "
+                "[id='frmPrincipal:pnldocumentosrecibidos']"
+            )
+
+        async def _obtener_filas_resultados():
+            tabla = await _obtener_tabla_resultados()
+            if tabla:
+                filas = await tabla.query_selector_all(
+                    "tbody[id$='_data'] > tr, "
+                    "tbody.ui-datatable-data > tr, "
+                    "tbody.rf-dt-b > tr"
+                )
+                if filas:
+                    return filas
+            return await page.query_selector_all(
+                "[id='frmPrincipal:tablaCompRecibidos_data'] > tr, "
+                "tbody[id$='tablaCompRecibidos_data'] > tr, "
+                "tbody.ui-datatable-data > tr"
+            )
+
+        async def _obtener_boton_siguiente():
+            tabla = await _obtener_tabla_resultados()
+            if tabla:
+                scoped = await tabla.query_selector(next_page_selector)
+                if scoped:
+                    return scoped
+            return await page.query_selector(next_page_selector)
+
         # Si debemos reanudar desde una página específica
         while pagina_actual < self._pagina_inicio:
-            next_btn = await page.query_selector(next_page_selector)
+            next_btn = await _obtener_boton_siguiente()
             if not next_btn:
                 break
             await next_btn.click()
@@ -2175,21 +2207,8 @@ class SRIScraperEngine:
                 if estado == EstadoPortal.MANTENIMIENTO:
                     raise SRIMaintenanceError("SRI en mantenimiento")
 
-                # Extraer filas de la tabla principal
-                data_table = await page.query_selector(
-                    "table[id*='tablaCompRecibidos'], "
-                    "table[id*='tablaComprobantes'], "
-                    "table[id*='tblComprobantes'], "
-                    "table[id*='dataTable']"
-                )
-                if data_table:
-                    filas = await data_table.query_selector_all(
-                        "tbody tr"
-                    )
-                else:
-                    filas = await page.query_selector_all(
-                        "table tbody tr"
-                    )
+                # Extraer únicamente filas de la tabla principal del SRI.
+                filas = await _obtener_filas_resultados()
 
                 self._log.info(
                     "filas_en_pagina",
@@ -2293,7 +2312,7 @@ class SRIScraperEngine:
                     )
 
                 # Intentar siguiente página
-                next_btn = await page.query_selector(next_page_selector)
+                next_btn = await _obtener_boton_siguiente()
                 if not next_btn:
                     self._log.info(
                         "ultima_pagina", pagina=pagina_actual
