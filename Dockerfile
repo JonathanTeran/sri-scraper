@@ -23,6 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     libatspi2.0-0 \
     xvfb \
+    x11vnc \
     xauth \
     fonts-liberation \
     libx11-xcb1 \

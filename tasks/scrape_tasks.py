@@ -4,7 +4,6 @@ Tareas Celery para scraping del SRI.
 Manejo de errores diferenciado por tipo de excepción SRI.
 """
 
-import asyncio
 import os
 import uuid
 from datetime import datetime
@@ -30,6 +29,7 @@ from scrapers.exceptions import (
     SRIMaintenanceError,
     SRITimeoutError,
 )
+from tasks.async_runner import run_async
 from tasks.celery_app import celery_app
 from tasks.constants import TIPOS_SCRAPING, TIPO_MAP
 from utils.crypto import decrypt
@@ -43,7 +43,7 @@ settings = get_settings()
 
 def _run_async(coro):
     """Ejecuta una corrutina desde contexto sync de Celery."""
-    return asyncio.run(coro)
+    return run_async(coro)
 
 
 def _get_async_session() -> async_sessionmaker[AsyncSession]:

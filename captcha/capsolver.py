@@ -65,6 +65,7 @@ class CapSolverResolver:
         enterprise: bool = False,
         action: str | None = None,
         score: float | None = None,
+        invisible: bool = False,
     ) -> str | None:
         """Resuelve reCAPTCHA y devuelve solo el token (sin inyectar)."""
         if not self._api_key:
@@ -83,7 +84,7 @@ class CapSolverResolver:
                     "type": "ReCaptchaV2EnterpriseTaskProxyLess",
                     "websiteURL": page_url,
                     "websiteKey": site_key,
-                    "isInvisible": True,
+                    "isInvisible": invisible,
                 }
                 if action:
                     task["pageAction"] = action
@@ -93,6 +94,8 @@ class CapSolverResolver:
                     "websiteURL": page_url,
                     "websiteKey": site_key,
                 }
+                if invisible:
+                    task["isInvisible"] = True
             log.info("capsolver_token_solicitando", task_type=task["type"], action=action)
             solution = await self._create_and_wait(task)
             token = solution.get("gRecaptchaResponse", "")

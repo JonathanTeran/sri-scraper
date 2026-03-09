@@ -35,6 +35,15 @@ Ejemplo con 2captcha:
 TWOCAPTCHA_API_KEY=tu_api_key CAPTCHA_PROVIDER=2captcha bash deploy/deploy.sh
 ```
 
+Ejemplo con fallback real `capsolver -> 2captcha`:
+
+```bash
+CAPSOLVER_API_KEY=tu_capsolver \
+TWOCAPTCHA_API_KEY=tu_2captcha \
+CAPTCHA_PROVIDER=capsolver \
+bash deploy/deploy.sh
+```
+
 Si quieres sobreescribir valores sin abrir `nano`, pásalos en el mismo comando:
 
 ```bash
@@ -61,6 +70,29 @@ Notas:
 
 - Si `API_DOMAIN` es un dominio, Caddy emitirá HTTPS automáticamente.
 - Si `API_DOMAIN` es la IP del Droplet, el servicio quedará por HTTP.
+
+## 3.1. Modo asistido por VNC
+
+Si quieres que el worker pase de automático a asistido cuando el SRI rechace todos
+los tokens, habilita VNC local del contenedor y mantén browser visible:
+
+```bash
+CAPSOLVER_API_KEY=tu_capsolver \
+TWOCAPTCHA_API_KEY=tu_2captcha \
+CAPTCHA_PROVIDER=capsolver \
+CAPTCHA_ASSISTED_MODE=fallback \
+ENABLE_VNC=1 \
+bash deploy/deploy.sh
+```
+
+El puerto VNC queda publicado sólo en `127.0.0.1:${WORKER_VNC_PORT:-5900}` del VPS.
+Accede por túnel SSH:
+
+```bash
+ssh -L 5900:127.0.0.1:5900 root@161.35.141.92
+```
+
+Luego abre tu cliente VNC contra `127.0.0.1:5900`.
 
 ## 4. Flower opcional
 

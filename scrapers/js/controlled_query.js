@@ -106,12 +106,10 @@ async ({ token, source, action }) => {
             resolve({ ...collect(), ...extra });
         };
 
-        const submit = (hasPreparedToken) => {
-            if (!hasPreparedToken) {
-                if (typeof window.executeRecaptcha === 'function') {
-                    window.executeRecaptcha(action);
-                    return 'executeRecaptcha';
-                }
+        const submit = () => {
+            if (typeof window.executeRecaptcha === 'function') {
+                window.executeRecaptcha(action);
+                return 'executeRecaptcha';
             }
             if (typeof window.rcBuscar === 'function') {
                 window.rcBuscar();
@@ -160,8 +158,14 @@ async ({ token, source, action }) => {
                 }
                 window.executeRecaptcha = function() {
                     setToken(finalToken);
+                    if (typeof origExecuteRecaptcha === 'function') {
+                        return origExecuteRecaptcha.apply(this, arguments);
+                    }
+                    if (typeof window.onSubmit === 'function') {
+                        return window.onSubmit();
+                    }
                     if (typeof window.rcBuscar === 'function') {
-                        window.rcBuscar();
+                        return window.rcBuscar();
                     }
                 };
             } else if (
@@ -190,7 +194,7 @@ async ({ token, source, action }) => {
                 }
             }
             setToken(finalToken);
-            const flow = submit(!!finalToken);
+            const flow = submit();
             if (!flow) {
                 finish({
                     error: 'no_submit_flow',

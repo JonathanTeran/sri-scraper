@@ -46,7 +46,9 @@ for key in \
   TWOCAPTCHA_API_KEY \
   CAPSOLVER_API_KEY \
   CAPTCHA_ASSISTED_MODE \
-  CAPTCHA_ASSISTED_TIMEOUT_SEC
+  CAPTCHA_ASSISTED_TIMEOUT_SEC \
+  ENABLE_VNC \
+  WORKER_VNC_PORT
 do
   value="${!key:-}"
   if [[ -n "${value}" ]]; then

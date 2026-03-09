@@ -36,15 +36,17 @@ class CaptchaResolver:
         enterprise: bool = False,
         action: str | None = None,
         score: float | None = None,
+        invisible: bool = False,
     ) -> str | None:
         """Resuelve reCAPTCHA y devuelve solo el token (sin inyectar)."""
         if not self._solver:
             return None
         try:
             kwargs = dict(sitekey=site_key, url=page_url)
+            if invisible:
+                kwargs["invisible"] = 1
             if enterprise:
                 kwargs["enterprise"] = 1
-                kwargs["invisible"] = 1
                 if score is not None and action:
                     kwargs["version"] = "v3"
                     kwargs["action"] = action

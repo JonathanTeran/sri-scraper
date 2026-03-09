@@ -16,6 +16,10 @@ import nodriver as uc
 
 from captcha.factory import crear_resolvers
 from config.settings import Settings
+from scrapers.captcha_strategy import (
+    build_captcha_attempt_plan,
+    resolve_provider_page_url,
+)
 from scrapers.exceptions import (
     SRICaptchaError,
     SRILoginError,
@@ -184,36 +188,13 @@ class SRINodriverEngine:
         )
 
     def _build_captcha_attempt_plan(self, max_intentos: int) -> list[dict]:
-        attempts: list[dict] = []
         assist_mode = self._settings.captcha_assisted_mode.lower().strip()
-        if assist_mode == "only" and self._captcha_assisted_available():
-            return [{"mode": "assisted"}]
-
-        native_attempts = min(2, max_intentos)
-        for _ in range(native_attempts):
-            attempts.append({"mode": "native"})
-
-        provider_slots = max_intentos - native_attempts
-        if provider_slots > 0:
-            provider_variants = [
-                {"variant": "enterprise_v3", "score": 0.9},
-                {"variant": "enterprise_v2", "score": None},
-            ]
-            provider_attempts: list[dict] = []
-            for resolver_info in self._captcha_resolvers:
-                for variant in provider_variants:
-                    provider_attempts.append({
-                        "mode": "provider",
-                        "provider": resolver_info["provider"],
-                        "resolver": resolver_info["resolver"],
-                        "variant": variant["variant"],
-                        "score": variant["score"],
-                    })
-            attempts.extend(provider_attempts[:provider_slots])
-
-        if assist_mode == "fallback" and self._captcha_assisted_available():
-            attempts.append({"mode": "assisted"})
-        return attempts
+        return build_captcha_attempt_plan(
+            assist_mode=assist_mode,
+            assisted_available=self._captcha_assisted_available(),
+            captcha_resolvers=self._captcha_resolvers,
+            max_attempts=max_intentos,
+        )
 
     async def _evaluate_asset(
         self,
@@ -257,23 +238,33 @@ class SRINodriverEngine:
         resolver,
         provider: str,
         site_key: str,
-        score: float | None,
+        attempt: dict,
     ) -> str | None:
         page = self._page
         assert page is not None
 
+        page_url = resolve_provider_page_url(
+            page.url,
+            attempt.get("page_url_mode", "canonical"),
+        )
         self._log.info(
             "captcha_provider_intento",
             provider=provider,
             site_key=site_key[:10],
-            variant="enterprise_v3" if score is not None else "enterprise_v2",
+            variant=attempt.get("variant"),
+            enterprise=attempt.get("enterprise"),
+            invisible=attempt.get("invisible"),
+            action=attempt.get("action"),
+            score=attempt.get("score"),
+            page_url_mode=attempt.get("page_url_mode"),
         )
         token = await resolver.resolver_token_recaptcha(
             site_key=site_key,
-            page_url=page.url.split("?")[0].split("#")[0],
-            enterprise=True,
-            action=RECAPTCHA_ACTION,
-            score=score,
+            page_url=page_url,
+            enterprise=attempt.get("enterprise", False),
+            action=attempt.get("action"),
+            score=attempt.get("score"),
+            invisible=attempt.get("invisible", False),
         )
         if token:
             self._log.info(
@@ -523,7 +514,7 @@ class SRINodriverEngine:
         ''')
         await asyncio.sleep(2)
 
-        max_intentos = 5
+        max_intentos = 12
         attempt_plan = self._build_captcha_attempt_plan(max_intentos)
         captcha_exitoso = False
         panel_html = ""
@@ -555,7 +546,7 @@ class SRINodriverEngine:
                     attempt["resolver"],
                     attempt["provider"],
                     site_key,
-                    attempt.get("score"),
+                    attempt,
                 )
                 if not token:
                     self._log.warning(

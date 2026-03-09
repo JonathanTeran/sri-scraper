@@ -29,6 +29,20 @@ else
 fi
 
 export DISPLAY=:99
+
+if [ "${ENABLE_VNC:-0}" = "1" ]; then
+  VNC_PORT="${VNC_PORT:-5900}"
+  x11vnc \
+    -display :99 \
+    -rfbport "${VNC_PORT}" \
+    -forever \
+    -shared \
+    -localhost \
+    -nopw \
+    >/tmp/x11vnc.log 2>&1 &
+  echo "x11vnc started on 127.0.0.1:${VNC_PORT}"
+fi
+
 exec celery \
   -A tasks.celery_app worker \
   --loglevel="${CELERY_LOGLEVEL:-info}" \

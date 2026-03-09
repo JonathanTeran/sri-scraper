@@ -48,3 +48,14 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+
+
+async def dispose_cached_engine() -> None:
+    """Cierra el engine cacheado y reinicia las factorias async."""
+    if _build_engine.cache_info().currsize == 0:
+        return
+
+    engine = _build_engine()
+    await engine.dispose()
+    _build_session_factory.cache_clear()
+    _build_engine.cache_clear()
