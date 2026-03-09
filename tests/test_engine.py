@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import scrapers.engine as engine_module
 from captcha.factory import crear_resolvers
 from scrapers.engine import SRIScraperEngine, EstadoPortal, URLS
 
@@ -193,6 +194,44 @@ class TestSRIScraperEngine:
         assert "--proxy-server=http://proxy.example.com:8080" in args
         assert "--proxy-bypass-list=localhost,127.0.0.1" in args
 
+    def test_build_fingerprint_profile_es_deterministico_por_tenant(self):
+        engine = self._make_engine()
+
+        profile_a = engine._build_fingerprint_profile()
+        profile_b = engine._build_fingerprint_profile()
+
+        assert profile_a == profile_b
+        assert profile_a["hardwareConcurrency"] in {4, 8, 12, 16}
+        assert profile_a["deviceMemory"] in {4, 8, 16}
+        assert "webglRenderer" in profile_a
+
+    def test_build_fingerprint_profile_varia_por_tenant(self):
+        engine = self._make_engine()
+        other = SRIScraperEngine(
+            tenant_ruc="1790012345001",
+            tenant_usuario="test_user",
+            tenant_password="test_pass",
+            periodo_anio=2026,
+            periodo_mes=3,
+            tipo_comprobante="Factura",
+            settings=engine._settings,
+        )
+
+        assert (
+            engine._build_fingerprint_profile()
+            != other._build_fingerprint_profile()
+        )
+
+    def test_build_soap_request_headers_usa_user_agent_del_browser(self):
+        engine = self._make_engine()
+        engine._page = MagicMock(url="https://srienlinea.sri.gob.ec/demo")
+
+        headers = engine._build_soap_request_headers("Custom UA")
+
+        assert headers["User-Agent"] == "Custom UA"
+        assert headers["Referer"] == "https://srienlinea.sri.gob.ec/demo"
+        assert headers["Origin"] == "https://srienlinea.sri.gob.ec"
+
     def test_descargar_xml_con_fallbacks_usa_lnkxml_si_soap_rechaza(self):
         engine = self._make_engine()
         boton_xml = object()
@@ -261,6 +300,24 @@ class TestSRIScraperEngine:
 
         with pytest.raises(Exception, match="sitekey"):
             asyncio.run(engine._obtener_site_key_consulta())
+
+    def test_ejecutar_recaptcha_nativo_simula_actividad(self, monkeypatch):
+        engine = self._make_engine()
+        engine._page = AsyncMock()
+        simular = AsyncMock()
+        monkeypatch.setattr(engine_module, "simular_actividad_humana", simular)
+        engine._ejecutar_consulta_controlada = AsyncMock(
+            return_value={"panelLen": 100}
+        )
+
+        result = asyncio.run(engine._ejecutar_recaptcha_nativo())
+
+        assert result["panelLen"] == 100
+        simular.assert_awaited_once_with(engine._page)
+        engine._ejecutar_consulta_controlada.assert_awaited_once_with(
+            token=None,
+            source="native",
+        )
 
 
 def test_crear_resolvers_respeta_orden_preferido():

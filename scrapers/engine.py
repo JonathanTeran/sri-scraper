@@ -9,7 +9,10 @@ import enum
 import re
 import os
 import asyncio
+import hashlib
+import json
 from pathlib import Path
+from contextlib import asynccontextmanager
 from urllib.parse import urlsplit, urlunsplit
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -59,11 +62,69 @@ from scrapers.exceptions import (
 from scrapers.session_manager import SessionManager
 from utils.browser_env import find_browser_executable
 from utils.crypto import decrypt
-from utils.delays import delay_humano, escribir_como_humano
+from utils.delays import (
+    delay_humano,
+    escribir_como_humano,
+    simular_actividad_humana,
+)
 from utils.screenshots import tomar_screenshot
 from utils.time import utc_now
 
 log = structlog.get_logger()
+
+DEFAULT_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+SRI_SOAP_URL = (
+    "https://cel.sri.gob.ec/comprobantes-electronicos-ws/"
+    "AutorizacionComprobantesOffline"
+)
+GPU_PROFILES = [
+    {
+        "webglVendor": "Google Inc. (Intel)",
+        "webglRenderer": (
+            "ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 "
+            "ps_5_0, D3D11)"
+        ),
+    },
+    {
+        "webglVendor": "Google Inc. (NVIDIA)",
+        "webglRenderer": (
+            "ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 "
+            "ps_5_0, D3D11)"
+        ),
+    },
+    {
+        "webglVendor": "Google Inc. (AMD)",
+        "webglRenderer": (
+            "ANGLE (AMD, AMD Radeon RX 580 2048SP Direct3D11 vs_5_0 "
+            "ps_5_0, D3D11)"
+        ),
+    },
+    {
+        "webglVendor": "Google Inc. (Intel)",
+        "webglRenderer": (
+            "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 "
+            "ps_5_0, D3D11)"
+        ),
+    },
+    {
+        "webglVendor": "Google Inc. (NVIDIA)",
+        "webglRenderer": (
+            "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Laptop GPU "
+            "Direct3D11 vs_5_0 ps_5_0, D3D11)"
+        ),
+    },
+    {
+        "webglVendor": "Google Inc. (AMD)",
+        "webglRenderer": (
+            "ANGLE (AMD, AMD Radeon(TM) Graphics Direct3D11 vs_5_0 "
+            "ps_5_0, D3D11)"
+        ),
+    },
+]
 
 class EstadoPortal(enum.Enum):
     NORMAL = "normal"
@@ -471,11 +532,7 @@ class SRIScraperEngine:
         kwargs = {
             "headless": self._settings.playwright_headless,
             "args": self._build_browser_launch_args(),
-            "user_agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/131.0.0.0 Safari/537.36"
-            ),
+            "user_agent": DEFAULT_BROWSER_USER_AGENT,
             "viewport": {"width": 1366, "height": 768},
             "locale": "es-EC",
             "timezone_id": "America/Guayaquil",
@@ -496,6 +553,167 @@ class SRIScraperEngine:
             kwargs["channel"] = self._settings.browser_channel
         return kwargs
 
+    def _build_fingerprint_profile(self) -> dict:
+        digest = hashlib.sha256(self._ruc.encode("utf-8")).digest()
+        gpu = GPU_PROFILES[digest[2] % len(GPU_PROFILES)]
+        return {
+            "hardwareConcurrency": [4, 8, 12, 16][digest[0] % 4],
+            "deviceMemory": [4, 8, 16][digest[1] % 3],
+            "maxTouchPoints": [0, 0, 1, 2][digest[3] % 4],
+            "webglVendor": gpu["webglVendor"],
+            "webglRenderer": gpu["webglRenderer"],
+            "canvasNoise": {
+                "r": (digest[4] % 5) - 2,
+                "g": (digest[5] % 5) - 2,
+                "b": (digest[6] % 5) - 2,
+                "a": digest[7] % 2,
+            },
+        }
+
+    def _build_fingerprint_init_script(self) -> str:
+        profile = json.dumps(
+            self._build_fingerprint_profile(),
+            separators=(",", ":"),
+        )
+        return f"""
+        (() => {{
+            const profile = {profile};
+            Object.defineProperty(navigator, 'webdriver', {{
+                get: () => undefined,
+            }});
+            Object.defineProperty(navigator, 'languages', {{
+                get: () => ['es-EC', 'es', 'en-US'],
+            }});
+            Object.defineProperty(navigator, 'language', {{
+                get: () => 'es-EC',
+            }});
+            Object.defineProperty(navigator, 'platform', {{
+                get: () => 'Win32',
+            }});
+            Object.defineProperty(navigator, 'hardwareConcurrency', {{
+                get: () => profile.hardwareConcurrency,
+            }});
+            Object.defineProperty(navigator, 'deviceMemory', {{
+                get: () => profile.deviceMemory,
+            }});
+            Object.defineProperty(navigator, 'maxTouchPoints', {{
+                get: () => profile.maxTouchPoints,
+            }});
+            window.chrome = window.chrome || {{ runtime: {{}} }};
+            if (navigator.permissions && navigator.permissions.query) {{
+                const originalQuery = navigator.permissions.query.bind(navigator.permissions);
+                navigator.permissions.query = (parameters) => (
+                    parameters && parameters.name === 'notifications'
+                        ? Promise.resolve({{ state: Notification.permission }})
+                        : originalQuery(parameters)
+                );
+            }}
+
+            const patchWebgl = (prototype) => {{
+                if (!prototype || !prototype.getParameter) {{
+                    return;
+                }}
+                const originalGetParameter = prototype.getParameter;
+                prototype.getParameter = function(parameter) {{
+                    if (parameter === 37445) return profile.webglVendor;
+                    if (parameter === 37446) return profile.webglRenderer;
+                    return originalGetParameter.call(this, parameter);
+                }};
+            }};
+
+            patchWebgl(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
+            patchWebgl(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
+
+            const mutateImageData = (imageData) => {{
+                if (!imageData || !imageData.data || imageData.data.length < 4) {{
+                    return imageData;
+                }}
+                for (let index = 0; index < Math.min(imageData.data.length, 24); index += 4) {{
+                    imageData.data[index] = Math.max(0, Math.min(255, imageData.data[index] + profile.canvasNoise.r));
+                    imageData.data[index + 1] = Math.max(0, Math.min(255, imageData.data[index + 1] + profile.canvasNoise.g));
+                    imageData.data[index + 2] = Math.max(0, Math.min(255, imageData.data[index + 2] + profile.canvasNoise.b));
+                    imageData.data[index + 3] = Math.max(0, Math.min(255, imageData.data[index + 3] + profile.canvasNoise.a));
+                }}
+                return imageData;
+            }};
+
+            if (window.CanvasRenderingContext2D && CanvasRenderingContext2D.prototype.getImageData) {{
+                const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+                CanvasRenderingContext2D.prototype.getImageData = function(...args) {{
+                    return mutateImageData(originalGetImageData.apply(this, args));
+                }};
+            }}
+        }})();
+        """
+
+    async def _resolve_browser_user_agent(self) -> str:
+        page = self._page
+        if page is not None:
+            try:
+                user_agent = await page.evaluate("() => navigator.userAgent")
+                if isinstance(user_agent, str) and user_agent.strip():
+                    return user_agent
+            except Exception:
+                pass
+        return DEFAULT_BROWSER_USER_AGENT
+
+    async def _get_browser_cookies(self) -> list[dict]:
+        if self._context is None:
+            return []
+        try:
+            return await self._context.cookies()
+        except Exception as exc:
+            self._log.warning("soap_cookies_no_disponibles", error=str(exc))
+            return []
+
+    def _build_soap_request_headers(self, user_agent: str) -> dict[str, str]:
+        referer = URLS["portal"]
+        if self._page is not None:
+            try:
+                referer = self._page.url or referer
+            except Exception:
+                referer = URLS["portal"]
+        return {
+            "Accept": "text/xml,application/xml,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
+            "Accept-Language": "es-EC,es;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Connection": "keep-alive",
+            "Content-Type": "text/xml; charset=utf-8",
+            "Origin": "https://srienlinea.sri.gob.ec",
+            "Referer": referer,
+            "SOAPAction": "",
+            "Upgrade-Insecure-Requests": "1",
+            "User-Agent": user_agent,
+        }
+
+    @asynccontextmanager
+    async def _crear_cliente_soap(self):
+        from curl_cffi.requests import AsyncSession
+
+        client_kwargs = {
+            "headers": self._build_soap_request_headers(
+                await self._resolve_browser_user_agent()
+            ),
+            "impersonate": "chrome131",
+            "timeout": 30,
+        }
+        proxy_server = self._build_proxy_server_for_browser_args()
+        if proxy_server:
+            client_kwargs["proxy"] = proxy_server
+
+        async with AsyncSession(**client_kwargs) as client:
+            for cookie in await self._get_browser_cookies():
+                name = cookie.get("name")
+                value = cookie.get("value")
+                if not name or value is None:
+                    continue
+                cookie_kwargs = {}
+                if cookie.get("domain"):
+                    cookie_kwargs["domain"] = cookie["domain"]
+                if cookie.get("path"):
+                    cookie_kwargs["path"] = cookie["path"]
+                client.cookies.set(name, value, **cookie_kwargs)
+            yield client
+
     async def _configurar_contexto_browser(self) -> None:
         context = self._context
         assert context is not None
@@ -505,43 +723,7 @@ class SRIScraperEngine:
             "DNT": "1",
             "Upgrade-Insecure-Requests": "1",
         })
-        await context.add_init_script("""
-        (() => {
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined,
-            });
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['es-EC', 'es', 'en-US'],
-            });
-            Object.defineProperty(navigator, 'language', {
-                get: () => 'es-EC',
-            });
-            Object.defineProperty(navigator, 'platform', {
-                get: () => 'Win32',
-            });
-            Object.defineProperty(navigator, 'hardwareConcurrency', {
-                get: () => 8,
-            });
-            Object.defineProperty(navigator, 'deviceMemory', {
-                get: () => 8,
-            });
-            window.chrome = window.chrome || { runtime: {} };
-            if (navigator.permissions && navigator.permissions.query) {
-                const originalQuery = navigator.permissions.query.bind(navigator.permissions);
-                navigator.permissions.query = (parameters) => (
-                    parameters && parameters.name === 'notifications'
-                        ? Promise.resolve({ state: Notification.permission })
-                        : originalQuery(parameters)
-                );
-            }
-            const originalGetParameter = WebGLRenderingContext.prototype.getParameter;
-            WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                if (parameter === 37445) return 'Intel Open Source Technology Center';
-                if (parameter === 37446) return 'Mesa DRI Intel(R) UHD Graphics';
-                return originalGetParameter.call(this, parameter);
-            };
-        })();
-        """)
+        await context.add_init_script(self._build_fingerprint_init_script())
 
     async def _cerrar_browser(self) -> None:
         """Cierra el navegador y libera recursos."""
@@ -849,6 +1031,13 @@ class SRIScraperEngine:
             elif attempt["mode"] == "assisted":
                 result = await self._ejecutar_consulta_asistida()
             else:
+                try:
+                    await simular_actividad_humana(page)
+                except Exception as exc:
+                    self._log.warning(
+                        "actividad_humana_pre_provider_error",
+                        error=str(exc),
+                    )
                 site_key = await self._obtener_site_key_consulta()
                 token = await self._resolver_token_con_proveedor(
                     attempt["resolver"],
@@ -1317,10 +1506,6 @@ class SRIScraperEngine:
         client,
         clave: str,
     ) -> tuple[bytes | None, str | None]:
-        SRI_WS_URL = (
-            "https://cel.sri.gob.ec/comprobantes-electronicos-ws/"
-            "AutorizacionComprobantesOffline"
-        )
         SOAP_TEMPLATE = (
             '<?xml version="1.0" encoding="UTF-8"?>'
             '<soapenv:Envelope '
@@ -1336,12 +1521,8 @@ class SRIScraperEngine:
 
         soap_body = SOAP_TEMPLATE.format(clave=clave)
         resp = await client.post(
-            SRI_WS_URL,
-            content=soap_body,
-            headers={
-                "Content-Type": "text/xml; charset=utf-8",
-                "SOAPAction": "",
-            },
+            SRI_SOAP_URL,
+            data=soap_body,
         )
 
         if resp.status_code != 200:
@@ -1448,10 +1629,9 @@ class SRIScraperEngine:
         self, comprobantes: list[dict]
     ) -> list[dict]:
         """Descarga XMLs por clave usando SOAP y fallback por lnkXml."""
-        import httpx
         resultados = []
 
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with self._crear_cliente_soap() as client:
             for idx, comp in enumerate(comprobantes):
                 clave = comp.get("clave_acceso")
                 if not clave:
@@ -1532,8 +1712,6 @@ class SRIScraperEngine:
 
     async def _procesar_todas_las_paginas(self) -> list[dict]:
         """Itera por todas las páginas de la tabla."""
-        import httpx
-
         page = self._page
         assert page is not None
         resultados: list[dict] = []
@@ -1553,7 +1731,7 @@ class SRIScraperEngine:
             )
             pagina_actual += 1
 
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with self._crear_cliente_soap() as client:
             while True:
                 self._log.info("procesando_pagina", pagina=pagina_actual)
                 resultados_pagina: list[dict] = []
@@ -1773,6 +1951,15 @@ class SRIScraperEngine:
         """
         self._log.info("recaptcha_nativo_iniciando")
         try:
+            page = self._page
+            assert page is not None
+            try:
+                await simular_actividad_humana(page)
+            except Exception as exc:
+                self._log.warning(
+                    "actividad_humana_pre_captcha_error",
+                    error=str(exc),
+                )
             result = await self._ejecutar_consulta_controlada(
                 token=None,
                 source="native",

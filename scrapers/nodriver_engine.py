@@ -26,6 +26,7 @@ from scrapers.exceptions import (
     SRISessionExpiredError,
     SRITimeoutError,
 )
+from utils.delays import simular_actividad_humana
 from utils.time import utc_now
 
 log = structlog.get_logger()
@@ -271,6 +272,10 @@ class SRINodriverEngine:
 
         # Solicitar resolución de Captcha
         self._log.info("solicitando_token_captcha", provider=self._settings.captcha_provider)
+        try:
+            await simular_actividad_humana(self._page)
+        except Exception as exc:
+            self._log.warning("actividad_humana_pre_captcha_error", error=str(exc))
 
         # Extraer el sitekey de la web
         site_key = await self._page.evaluate('''
