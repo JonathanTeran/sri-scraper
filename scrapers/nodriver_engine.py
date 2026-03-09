@@ -481,7 +481,14 @@ class SRINodriverEngine:
                 or result.get("tableContainerHtmlLen", 0) > 100
                 or result.get("tableRows", 0) > 0
                 or result.get("tableHtmlLen", 0) > 100
-                or "captcha" in result.get("messages", "").lower()
+            ):
+                return result
+
+            # Ignore stale "Captcha incorrecta" messages from previous attempts
+            # until the operator has actually submitted the assisted flow.
+            if (
+                result.get("submitRequested")
+                and "captcha" in result.get("messages", "").lower()
             ):
                 return result
 
