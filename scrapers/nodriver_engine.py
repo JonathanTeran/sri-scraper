@@ -496,6 +496,32 @@ class SRINodriverEngine:
         self._log.info("seleccionando_filtros")
         page = self._page
         assert page is not None
+
+        async def _snapshot_filtros() -> dict:
+            return await page.evaluate(
+                """
+                () => {
+                    const readSelect = (id) => {
+                        const el = document.getElementById(id);
+                        if (!el) return null;
+                        const idx = el.selectedIndex;
+                        const opt = idx >= 0 ? el.options[idx] : null;
+                        return {
+                            id,
+                            value: el.value || '',
+                            label: opt ? (opt.textContent || '').trim() : '',
+                            options: el.options ? el.options.length : 0,
+                        };
+                    };
+                    return {
+                        anio: readSelect('frmPrincipal:ano'),
+                        mes: readSelect('frmPrincipal:mes'),
+                        dia: readSelect('frmPrincipal:dia'),
+                        tipo: readSelect('frmPrincipal:cmbTipoComprobante'),
+                    };
+                }
+                """
+            )
         
         # Seleccionar Año
         await page.evaluate(f'''
@@ -523,6 +549,16 @@ class SRINodriverEngine:
         }}
         ''')
         await asyncio.sleep(2)
+
+        self._log.info(
+            "filtros_seleccionados",
+            filtros=await _snapshot_filtros(),
+            esperado={
+                "anio": self._anio,
+                "mes": mes_str,
+                "tipo": self._tipo,
+            },
+        )
 
         max_intentos = 12
         attempt_plan = self._build_captcha_attempt_plan(max_intentos)

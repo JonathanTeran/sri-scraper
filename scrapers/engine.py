@@ -912,6 +912,32 @@ class SRIScraperEngine:
         page = self._page
         assert page is not None
 
+        async def _snapshot_filtros() -> dict:
+            return await page.evaluate(
+                """
+                () => {
+                    const readSelect = (id) => {
+                        const el = document.getElementById(id);
+                        if (!el) return null;
+                        const idx = el.selectedIndex;
+                        const opt = idx >= 0 ? el.options[idx] : null;
+                        return {
+                            id,
+                            value: el.value || '',
+                            label: opt ? (opt.textContent || '').trim() : '',
+                            options: el.options ? el.options.length : 0,
+                        };
+                    };
+                    return {
+                        anio: readSelect('frmPrincipal:ano'),
+                        mes: readSelect('frmPrincipal:mes'),
+                        dia: readSelect('frmPrincipal:dia'),
+                        tipo: readSelect('frmPrincipal:cmbTipoComprobante'),
+                    };
+                }
+                """
+            )
+
         # Seleccionar año
         anio_el = await page.query_selector(SEL["anio"])
         if anio_el:
@@ -942,6 +968,16 @@ class SRIScraperEngine:
         if tipo_el:
             await tipo_el.select_option(label=self._tipo)
             await delay_humano(500, 1000)
+
+        self._log.info(
+            "filtros_seleccionados",
+            filtros=await _snapshot_filtros(),
+            esperado={
+                "anio": self._anio,
+                "mes": MESES[self._mes - 1],
+                "tipo": self._tipo,
+            },
+        )
 
         max_intentos = 12
         attempt_plan = self._build_captcha_attempt_plan(max_intentos)
@@ -977,6 +1013,18 @@ class SRIScraperEngine:
                 intercepted_data["primefaces_partial"] = (
                     params.get("javax.faces.partial.ajax", [""])[0] == "true"
                 )
+                intercepted_data["posted_filters"] = {
+                    "anio": params.get("frmPrincipal:ano", [""])[0],
+                    "mes": params.get("frmPrincipal:mes", [""])[0],
+                    "dia": params.get("frmPrincipal:dia", [""])[0],
+                    "tipo": params.get(
+                        "frmPrincipal:cmbTipoComprobante", [""]
+                    )[0],
+                    "source": params.get("javax.faces.source", [""])[0],
+                    "event": params.get(
+                        "javax.faces.behavior.event", [""]
+                    )[0],
+                }
 
                 self._log.info(
                     "post_interceptado",
@@ -984,6 +1032,7 @@ class SRIScraperEngine:
                     has_token=bool(token),
                     token_len=len(token),
                     token_prefix=token[:50] if token else "",
+                    filtros=intercepted_data["posted_filters"],
                 )
 
                 # If we have a replacement token, swap it
@@ -1132,6 +1181,7 @@ class SRIScraperEngine:
                     intento=intento,
                     empty_partial=empty_partial,
                     request_url=intercepted_data.get("request_url"),
+                    posted_filters=intercepted_data.get("posted_filters"),
                 )
                 break
 
