@@ -48,8 +48,7 @@ curl http://localhost:8000/ready
 Para despliegue en DigitalOcean VPS usa el stack de producción:
 
 ```bash
-cp .env.vps.example .env.vps
-bash deploy/deploy.sh
+CAPSOLVER_API_KEY=tu_api_key bash deploy/deploy.sh
 ```
 
 Documentación completa: [deploy/DIGITALOCEAN_VPS.md](/Users/jonathanteran/sri-scraper/deploy/DIGITALOCEAN_VPS.md)

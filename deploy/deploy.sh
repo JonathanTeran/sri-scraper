@@ -4,10 +4,61 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STACK_FILE="${ROOT_DIR}/docker-compose.prod.yml"
 ENV_FILE="${ENV_FILE:-${ROOT_DIR}/.env.vps}"
+RENDER_ENV_SCRIPT="${ROOT_DIR}/deploy/render-env.sh"
+
+upsert_env() {
+  local key="${1}"
+  local value="${2}"
+  python3 - "${ENV_FILE}" "${key}" "${value}" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+
+lines = env_path.read_text(encoding="utf-8").splitlines()
+prefix = f"{key}="
+updated = False
+for index, line in enumerate(lines):
+    if line.startswith(prefix):
+        lines[index] = f"{key}={value}"
+        updated = True
+        break
+
+if not updated:
+    lines.append(f"{key}={value}")
+
+env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+}
 
 if [[ ! -f "${ENV_FILE}" ]]; then
-  echo "No existe el archivo de entorno: ${ENV_FILE}"
-  echo "Copia .env.vps.example a .env.vps y complétalo."
+  echo "No existe ${ENV_FILE}. Generándolo automáticamente..."
+  ENV_FILE="${ENV_FILE}" bash "${RENDER_ENV_SCRIPT}"
+fi
+
+for key in \
+  API_DOMAIN \
+  POSTGRES_PASSWORD \
+  SECRET_KEY \
+  CAPTCHA_PROVIDER \
+  TWOCAPTCHA_API_KEY \
+  CAPSOLVER_API_KEY \
+  CAPTCHA_ASSISTED_MODE \
+  CAPTCHA_ASSISTED_TIMEOUT_SEC
+do
+  value="${!key:-}"
+  if [[ -n "${value}" ]]; then
+    upsert_env "${key}" "${value}"
+  fi
+done
+
+if ! grep -qE '^CAPSOLVER_API_KEY=.+' "${ENV_FILE}" \
+  && ! grep -qE '^TWOCAPTCHA_API_KEY=.+' "${ENV_FILE}"; then
+  echo "Falta configurar una API key de CAPTCHA en ${ENV_FILE}."
+  echo "Ejemplo sin editar archivos:"
+  echo "CAPSOLVER_API_KEY=tu_api_key bash deploy/deploy.sh"
   exit 1
 fi
 
