@@ -30,17 +30,37 @@ fi
 
 export DISPLAY=:99
 
-if [ "${ENABLE_VNC:-0}" = "1" ]; then
+if [ "${ENABLE_VNC:-0}" = "1" ] || [ "${ENABLE_NOVNC:-0}" = "1" ]; then
   VNC_PORT="${VNC_PORT:-5900}"
-  x11vnc \
-    -display :99 \
-    -rfbport "${VNC_PORT}" \
-    -forever \
-    -shared \
-    -localhost \
-    -nopw \
-    >/tmp/x11vnc.log 2>&1 &
+  X11VNC_ARGS=(
+    -display :99
+    -rfbport "${VNC_PORT}"
+    -forever
+    -shared
+    -localhost
+  )
+
+  if [ -n "${VNC_PASSWORD:-}" ]; then
+    x11vnc -storepasswd "${VNC_PASSWORD}" /tmp/x11vnc.pass >/dev/null
+    chmod 600 /tmp/x11vnc.pass
+    X11VNC_ARGS+=(-rfbauth /tmp/x11vnc.pass)
+  else
+    X11VNC_ARGS+=(-nopw)
+  fi
+
+  x11vnc "${X11VNC_ARGS[@]}" >/tmp/x11vnc.log 2>&1 &
   echo "x11vnc started on 127.0.0.1:${VNC_PORT}"
+
+  if [ "${ENABLE_NOVNC:-0}" = "1" ]; then
+    NOVNC_PORT="${NOVNC_PORT:-6901}"
+    NOVNC_WEB_DIR="${NOVNC_WEB_DIR:-/usr/share/novnc}"
+    websockify \
+      --web "${NOVNC_WEB_DIR}" \
+      "${NOVNC_PORT}" \
+      "127.0.0.1:${VNC_PORT}" \
+      >/tmp/novnc.log 2>&1 &
+    echo "noVNC started on 0.0.0.0:${NOVNC_PORT}"
+  fi
 fi
 
 exec celery \

@@ -171,5 +171,5 @@ sri-scraper/
 - El worker admite `CAPTCHA_PROVIDER=capsolver|2captcha`, agota variantes SRI por proveedor y encadena ambos si las dos API keys están configuradas.
 - El browser usa perfil persistente por tenant en `chrome_profile/{ruc}`; en VPS se recomienda `BROWSER_PREFER_NODRIVER=false` hasta estabilizar `nodriver`.
 - Se puede enrutar por proxy con `BROWSER_PROXY_SERVER`, `BROWSER_PROXY_USERNAME` y `BROWSER_PROXY_PASSWORD`.
-- El modo asistido se activa con `CAPTCHA_ASSISTED_MODE=fallback|only` y, en Docker, se puede ver por VNC local del worker (`ENABLE_VNC=1` + túnel SSH al puerto `WORKER_VNC_PORT`).
+- El modo asistido se activa con `CAPTCHA_ASSISTED_MODE=fallback|only`; en Docker puedes entrar por VNC (`ENABLE_VNC=1`) o por navegador con noVNC (`ENABLE_NOVNC=1`) usando túnel SSH a `WORKER_VNC_PORT` o `WORKER_NOVNC_PORT`.
 # sri-scraper

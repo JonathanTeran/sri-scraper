@@ -71,10 +71,10 @@ Notas:
 - Si `API_DOMAIN` es un dominio, Caddy emitirá HTTPS automáticamente.
 - Si `API_DOMAIN` es la IP del Droplet, el servicio quedará por HTTP.
 
-## 3.1. Modo asistido por VNC
+## 3.1. Modo asistido por VNC o navegador
 
 Si quieres que el worker pase de automático a asistido cuando el SRI rechace todos
-los tokens, habilita VNC local del contenedor y mantén browser visible:
+los tokens, habilita acceso visual local del contenedor y mantén browser visible:
 
 ```bash
 CAPSOLVER_API_KEY=tu_capsolver \
@@ -83,17 +83,31 @@ CAPTCHA_PROVIDER=capsolver \
 BROWSER_PREFER_NODRIVER=false \
 CAPTCHA_ASSISTED_MODE=fallback \
 ENABLE_VNC=1 \
+ENABLE_NOVNC=1 \
+VNC_PASSWORD=elige_una_clave_vnc \
 bash deploy/deploy.sh
 ```
 
-El puerto VNC queda publicado sólo en `127.0.0.1:${WORKER_VNC_PORT:-5900}` del VPS.
-Accede por túnel SSH:
+El puerto VNC queda publicado sólo en `127.0.0.1:${WORKER_VNC_PORT:-5900}` del VPS
+y noVNC queda en `127.0.0.1:${WORKER_NOVNC_PORT:-6901}`.
+
+Acceso por navegador con túnel SSH:
+
+```bash
+ssh -L 16901:127.0.0.1:6901 root@161.35.141.92
+```
+
+Luego abre:
+
+- [http://127.0.0.1:16901/vnc.html?autoconnect=1&resize=remote](http://127.0.0.1:16901/vnc.html?autoconnect=1&resize=remote)
+
+Acceso por cliente VNC clásico:
 
 ```bash
 ssh -L 5900:127.0.0.1:5900 root@161.35.141.92
 ```
 
-Luego abre tu cliente VNC contra `127.0.0.1:5900`.
+Luego abre tu cliente VNC contra `127.0.0.1:5900` usando `VNC_PASSWORD`.
 
 ## 4. Flower opcional
 

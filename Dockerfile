@@ -24,6 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libatspi2.0-0 \
     xvfb \
     x11vnc \
+    novnc \
+    websockify \
     xauth \
     fonts-liberation \
     libx11-xcb1 \
