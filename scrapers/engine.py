@@ -1331,21 +1331,32 @@ class SRIScraperEngine:
 
             msgs = result.get("messages", "").lower()
             panel_len = result.get("panelLen", 0)
+            table_container_html_len = result.get(
+                "tableContainerHtmlLen", 0
+            )
             table_rows = result.get("tableRows", 0)
             table_html_len = result.get("tableHtmlLen", 0)
             error = result.get("error")
             empty_partial = bool(result.get("emptyPartialResponse"))
             has_token = bool(intercepted_data.get("has_token"))
 
-            if panel_len > 50 or table_rows > 0 or table_html_len > 100:
+            if (
+                panel_len > 50
+                or table_container_html_len > 100
+                or table_rows > 0
+                or table_html_len > 100
+            ):
                 html_content = (
                     result.get("panelHtml")
+                    or result.get("documentsPanelHtml")
+                    or result.get("tableContainerHtml", "")
                     or result.get("tableHtml", "")
                 )
                 captcha_exitoso = True
                 self._log.info(
                     "consulta_exitosa",
                     intento=intento,
+                    table_container_id=result.get("tableContainerId"),
                     table_rows=table_rows,
                     table_id=result.get("tableId"),
                 )

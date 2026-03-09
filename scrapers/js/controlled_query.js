@@ -88,8 +88,16 @@ async ({
         const documentsPanel = document.getElementById(
             'frmPrincipal:pnldocumentosrecibidos'
         );
+        const tableContainer = document.querySelector(
+            "div[id*='tablaCompRecibidos'], "
+            + "div[id*='tablaComprobantes'], "
+            + "div[id*='tblComprobantes']"
+        );
         const table = document.querySelector(
-            "table[id*='tablaCompRecibidos'], "
+            "div[id*='tablaCompRecibidos'] table, "
+            + "div[id*='tablaComprobantes'] table, "
+            + "div[id*='tblComprobantes'] table, "
+            + "table[id*='tablaCompRecibidos'], "
             + "table[id*='tablaComprobantes'], "
             + "table[id*='tblComprobantes'], "
             + "table[id*='dataTable']"
@@ -124,6 +132,9 @@ async ({
             panelHtml: panel ? panel.innerHTML : '',
             documentsPanelLen: documentsPanel ? documentsPanel.innerHTML.length : 0,
             documentsPanelHtml: documentsPanel ? documentsPanel.innerHTML : '',
+            tableContainerId: tableContainer ? (tableContainer.id || '') : '',
+            tableContainerHtmlLen: tableContainer ? tableContainer.innerHTML.length : 0,
+            tableContainerHtml: tableContainer ? tableContainer.innerHTML : '',
             tableId: table ? (table.id || '') : '',
             tableBodyId: tableBody ? (tableBody.id || '') : '',
             tableRows: rows.length,
@@ -288,12 +299,32 @@ async ({
                     network.partialDocumentsHtml
                     || network.partialPanelHtml
                 );
+                const partialContainer = container.querySelector(
+                    "div[id*='tablaCompRecibidos'], "
+                    + "div[id*='tablaComprobantes'], "
+                    + "div[id*='tblComprobantes']"
+                );
                 const partialTable = container.querySelector(
-                    "table[id*='tablaCompRecibidos'], "
+                    "div[id*='tablaCompRecibidos'] table, "
+                    + "div[id*='tablaComprobantes'] table, "
+                    + "div[id*='tblComprobantes'] table, "
+                    + "table[id*='tablaCompRecibidos'], "
                     + "table[id*='tablaComprobantes'], "
                     + "table[id*='tblComprobantes'], "
                     + "table[id*='dataTable']"
                 );
+                const partialBody = container.querySelector(
+                    "tbody[id*='tablaCompRecibidos_data'], "
+                    + "tbody[id*='tablaComprobantes_data'], "
+                    + "tbody[id*='tblComprobantes_data']"
+                );
+                if (partialContainer) {
+                    merged.tableContainerId = partialContainer.id || '';
+                    merged.tableContainerHtml = partialContainer.innerHTML || '';
+                    merged.tableContainerHtmlLen = (
+                        partialContainer.innerHTML || ''
+                    ).length;
+                }
                 if (partialTable) {
                     merged.tableId = partialTable.id || '';
                     merged.tableHtml = partialTable.outerHTML || '';
@@ -301,6 +332,11 @@ async ({
                     merged.tableRows = partialTable.querySelectorAll(
                         'tbody tr'
                     ).length;
+                } else if (partialBody) {
+                    merged.tableBodyId = partialBody.id || '';
+                    merged.tableRows = Array.from(
+                        partialBody.querySelectorAll('tr')
+                    ).filter((row) => row.querySelectorAll('td').length >= 3).length;
                 }
             }
             if (network.partialMessages) {
@@ -342,6 +378,7 @@ async ({
             return (
                 snapshot.panelLen > 50
                 || snapshot.documentsPanelLen > 100
+                || snapshot.tableContainerHtmlLen > 100
                 || snapshot.tableRows > 0
                 || snapshot.tableHtmlLen > 100
                 || messages.includes('captcha')
@@ -565,6 +602,7 @@ async ({
                     || snapshot.messages
                     || snapshot.panelLen > 0
                     || snapshot.documentsPanelLen > 100
+                    || snapshot.tableContainerHtmlLen > 100
                     || snapshot.tableRows > 0
                     || snapshot.tableHtmlLen > 100
                 ) {
