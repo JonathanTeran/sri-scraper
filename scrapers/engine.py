@@ -938,36 +938,98 @@ class SRIScraperEngine:
                 """
             )
 
+        async def _wait_ajax_idle(timeout_ms: int = 8000) -> None:
+            try:
+                await page.wait_for_function(
+                    """
+                    () => {
+                        const q = window.PrimeFaces
+                            && PrimeFaces.ajax
+                            && PrimeFaces.ajax.Queue;
+                        return !q || typeof q.isEmpty !== 'function' || q.isEmpty();
+                    }
+                    """,
+                    timeout=timeout_ms,
+                )
+            except Exception:
+                return None
+
+        async def _set_select(
+            selector: str,
+            *,
+            label: str | None = None,
+            value: str | None = None,
+        ) -> dict:
+            result = await page.evaluate(
+                """
+                ({ selector, label, value }) => {
+                    const el = document.querySelector(selector);
+                    if (!el) {
+                        return {
+                            found: false,
+                            matched: false,
+                            value: '',
+                            label: '',
+                            options: 0,
+                        };
+                    }
+                    let matched = false;
+                    const desiredLabel = label == null ? null : String(label).trim();
+                    const desiredValue = value == null ? null : String(value);
+                    for (const opt of Array.from(el.options || [])) {
+                        const optLabel = (opt.textContent || '').trim();
+                        const optValue = String(opt.value || '');
+                        if (
+                            (desiredLabel !== null && optLabel === desiredLabel)
+                            || (desiredValue !== null && optValue === desiredValue)
+                        ) {
+                            el.value = opt.value;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    const idx = el.selectedIndex;
+                    const opt = idx >= 0 ? el.options[idx] : null;
+                    return {
+                        found: true,
+                        matched,
+                        value: el.value || '',
+                        label: opt ? (opt.textContent || '').trim() : '',
+                        options: el.options ? el.options.length : 0,
+                    };
+                }
+                """,
+                {
+                    "selector": selector,
+                    "label": label,
+                    "value": value,
+                },
+            )
+            await _wait_ajax_idle()
+            return result
+
         # Seleccionar año
-        anio_el = await page.query_selector(SEL["anio"])
-        if anio_el:
-            await anio_el.select_option(label=str(self._anio))
-            await delay_humano(1000, 2000)
+        await _set_select(SEL["anio"], label=str(self._anio))
+        await delay_humano(1000, 2000)
 
         # Esperar actualización AJAX del selector de mes
+        await _wait_ajax_idle()
         await asyncio.sleep(1)
 
         # Seleccionar mes
-        mes_el = await page.query_selector(SEL["mes"])
-        if mes_el:
-            mes_label = MESES[self._mes - 1]
-            await mes_el.select_option(label=mes_label)
-            await delay_humano(1000, 2000)
+        mes_label = MESES[self._mes - 1]
+        await _set_select(SEL["mes"], label=mes_label)
+        await delay_humano(1000, 2000)
 
         # Día → "Todos" (valor "0")
-        dia_el = await page.query_selector(SEL["dia"])
-        if dia_el:
-            try:
-                await dia_el.select_option(value="0")
-            except Exception:
-                pass
-            await delay_humano(500, 1000)
+        await _set_select(SEL["dia"], value="0")
+        await delay_humano(500, 1000)
 
         # Seleccionar tipo de comprobante
-        tipo_el = await page.query_selector(SEL["tipo"])
-        if tipo_el:
-            await tipo_el.select_option(label=self._tipo)
-            await delay_humano(500, 1000)
+        await _set_select(SEL["tipo"], label=self._tipo)
+        await delay_humano(500, 1000)
 
         self._log.info(
             "filtros_seleccionados",

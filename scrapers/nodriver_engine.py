@@ -522,32 +522,79 @@ class SRINodriverEngine:
                 }
                 """
             )
+
+        async def _set_select(
+            element_id: str,
+            *,
+            label: str | None = None,
+            value: str | None = None,
+        ) -> dict:
+            return await page.evaluate(
+                """
+                ({ elementId, label, value }) => {
+                    const el = document.getElementById(elementId);
+                    if (!el) {
+                        return {
+                            found: false,
+                            matched: false,
+                            value: '',
+                            label: '',
+                            options: 0,
+                        };
+                    }
+                    let matched = false;
+                    const desiredLabel = label == null ? null : String(label).trim();
+                    const desiredValue = value == null ? null : String(value);
+                    for (const opt of Array.from(el.options || [])) {
+                        const optLabel = (opt.textContent || '').trim();
+                        const optValue = String(opt.value || '');
+                        if (
+                            (desiredLabel !== null && optLabel === desiredLabel)
+                            || (desiredValue !== null && optValue === desiredValue)
+                        ) {
+                            el.value = opt.value;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    const idx = el.selectedIndex;
+                    const opt = idx >= 0 ? el.options[idx] : null;
+                    return {
+                        found: true,
+                        matched,
+                        value: el.value || '',
+                        label: opt ? (opt.textContent || '').trim() : '',
+                        options: el.options ? el.options.length : 0,
+                    };
+                }
+                """,
+                {
+                    "elementId": element_id,
+                    "label": label,
+                    "value": value,
+                },
+            )
         
         # Seleccionar Año
-        await page.evaluate(f'''
-        () => {{
-            const a = document.getElementById('frmPrincipal:anio');
-            if (a) {{
-                for (let o of a.options)
-                    if (o.text==='{self._anio}') {{ a.value=o.value; break; }}
-                a.dispatchEvent(new Event('change', {{bubbles:true}}));
-            }}
-        }}
-        ''')
+        await _set_select('frmPrincipal:ano', label=str(self._anio))
         await asyncio.sleep(2)
         
         # Seleccionar Mes
         mes_str = MESES[self._mes - 1]
-        await page.evaluate(f'''
-        () => {{
-            const m = document.getElementById('frmPrincipal:mes');
-            if (m) {{
-                for (let o of m.options)
-                    if (o.text==='{mes_str}') {{ m.value=o.value; break; }}
-                m.dispatchEvent(new Event('change', {{bubbles:true}}));
-            }}
-        }}
-        ''')
+        await _set_select('frmPrincipal:mes', label=mes_str)
+        await asyncio.sleep(2)
+
+        # Día → Todos
+        await _set_select('frmPrincipal:dia', value='0')
+        await asyncio.sleep(1)
+
+        # Tipo de comprobante
+        await _set_select(
+            'frmPrincipal:cmbTipoComprobante',
+            label=self._tipo,
+        )
         await asyncio.sleep(2)
 
         self._log.info(
