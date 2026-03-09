@@ -747,11 +747,16 @@ class SRINodriverEngine:
 
             msgs = query_result.get("messages", "").lower()
             panel_len = query_result.get("panelLen", 0)
+            table_rows = query_result.get("tableRows", 0)
+            table_html_len = query_result.get("tableHtmlLen", 0)
             error = query_result.get("error")
             empty_partial = bool(query_result.get("emptyPartialResponse"))
 
-            if panel_len > 50:
-                panel_html = query_result.get("panelHtml", "")
+            if panel_len > 50 or table_rows > 0 or table_html_len > 100:
+                panel_html = (
+                    query_result.get("panelHtml")
+                    or query_result.get("tableHtml", "")
+                )
                 captcha_exitoso = True
                 break
             if "captcha" in msgs:

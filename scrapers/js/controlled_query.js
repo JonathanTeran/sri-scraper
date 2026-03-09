@@ -66,6 +66,21 @@ async ({
         const panel = document.getElementById(
             'frmPrincipal:panelListaComprobantes'
         );
+        const table = document.querySelector(
+            "table[id*='tablaCompRecibidos'], "
+            + "table[id*='tablaComprobantes'], "
+            + "table[id*='tblComprobantes'], "
+            + "table[id*='dataTable']"
+        );
+        const rows = table
+            ? Array.from(table.querySelectorAll('tbody tr')).filter(
+                (row) => row.querySelectorAll('td').length >= 3
+            )
+            : [];
+        const paginator = document.querySelector(
+            ".ui-paginator-current, .ui-paginator-pages, "
+            + "[id*='paginator'], [class*='paginator']"
+        );
         const tas = document.querySelectorAll(
             '[name="g-recaptcha-response"]'
         );
@@ -74,6 +89,11 @@ async ({
             messages: msgs ? msgs.innerText.trim() : '',
             panelLen: panel ? panel.innerHTML.length : 0,
             panelHtml: panel ? panel.innerHTML : '',
+            tableId: table ? (table.id || '') : '',
+            tableRows: rows.length,
+            tableHtmlLen: table ? table.outerHTML.length : 0,
+            tableHtml: table ? table.outerHTML : '',
+            paginatorText: paginator ? paginator.textContent.trim() : '',
             hasBuscarButton: !!getBuscarButton(),
             viewStateLen: (
                 document.querySelector('[name="javax.faces.ViewState"]') || {}
@@ -195,6 +215,28 @@ async ({
                 merged.panelHtml = network.partialPanelHtml;
                 merged.panelLen = network.partialPanelHtml.length;
             }
+            if (
+                merged.tableRows === 0
+                && merged.tableHtmlLen === 0
+                && network.partialPanelHtml
+            ) {
+                const container = document.createElement('div');
+                container.innerHTML = network.partialPanelHtml;
+                const partialTable = container.querySelector(
+                    "table[id*='tablaCompRecibidos'], "
+                    + "table[id*='tablaComprobantes'], "
+                    + "table[id*='tblComprobantes'], "
+                    + "table[id*='dataTable']"
+                );
+                if (partialTable) {
+                    merged.tableId = partialTable.id || '';
+                    merged.tableHtml = partialTable.outerHTML || '';
+                    merged.tableHtmlLen = merged.tableHtml.length;
+                    merged.tableRows = partialTable.querySelectorAll(
+                        'tbody tr'
+                    ).length;
+                }
+            }
             if (network.partialMessages) {
                 merged.messages = network.partialMessages;
             }
@@ -216,6 +258,8 @@ async ({
             ]);
             merged.emptyPartialResponse = Boolean(
                 merged.panelLen === 0
+                && merged.tableRows === 0
+                && merged.tableHtmlLen === 0
                 && !(merged.messages || '').trim()
                 && merged.network.partialResponse
                 && merged.network.lastStatus === 200
@@ -231,6 +275,8 @@ async ({
             const messages = (snapshot.messages || '').toLowerCase();
             return (
                 snapshot.panelLen > 50
+                || snapshot.tableRows > 0
+                || snapshot.tableHtmlLen > 100
                 || messages.includes('captcha')
                 || messages.includes('no se encontraron')
                 || messages.includes('ha ocurrido un error')
@@ -440,7 +486,13 @@ async ({
                 && network.inFlight === 0
                 && queueIdle()
             ) {
-                if (network.partialResponse || snapshot.messages || snapshot.panelLen > 0) {
+                if (
+                    network.partialResponse
+                    || snapshot.messages
+                    || snapshot.panelLen > 0
+                    || snapshot.tableRows > 0
+                    || snapshot.tableHtmlLen > 100
+                ) {
                     finish();
                 }
             }
