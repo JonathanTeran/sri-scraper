@@ -69,6 +69,15 @@ class RetencionResponse(BaseModel):
     base_imponible: Decimal = Field(description="Base imponible sobre la que se calcula la retención")
     porcentaje_retener: Decimal = Field(description="Porcentaje de retención aplicado")
     valor_retenido: Decimal = Field(description="Valor retenido (base × porcentaje)")
+    cod_doc_sustento: str | None = Field(
+        description="Código del documento de sustento"
+    )
+    num_doc_sustento: str | None = Field(
+        description="Número completo del documento de sustento"
+    )
+    fecha_emision_doc_sustento: str | None = Field(
+        description="Fecha de emisión del documento de sustento (dd/MM/yyyy)"
+    )
 
     model_config = {"from_attributes": True}
 
