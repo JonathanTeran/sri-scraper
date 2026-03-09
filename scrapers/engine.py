@@ -545,7 +545,6 @@ class SRIScraperEngine:
             "extra_http_headers": {
                 "Accept-Language": "es-EC,es;q=0.9,en-US;q=0.8,en;q=0.7",
                 "DNT": "1",
-                "Upgrade-Insecure-Requests": "1",
             },
         }
         proxy = self._build_playwright_proxy_settings()
@@ -725,7 +724,6 @@ class SRIScraperEngine:
         await context.set_extra_http_headers({
             "Accept-Language": "es-EC,es;q=0.9,en-US;q=0.8,en;q=0.7",
             "DNT": "1",
-            "Upgrade-Insecure-Requests": "1",
         })
         await context.add_init_script(self._build_fingerprint_init_script())
 
