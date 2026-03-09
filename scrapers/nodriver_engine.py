@@ -523,6 +523,90 @@ class SRINodriverEngine:
                 """
             )
 
+        async def _configurar_criterio_ruc() -> dict:
+            return await page.evaluate(
+                """
+                ({ ruc }) => {
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const style = window.getComputedStyle(el);
+                        return style.display !== 'none'
+                            && style.visibility !== 'hidden'
+                            && el.offsetParent !== null;
+                    };
+                    const normalize = (value) => (value || '').trim().toLowerCase();
+                    const form = document.getElementById('frmPrincipal')
+                        || document.querySelector('form[id="frmPrincipal"]')
+                        || document.querySelector('form');
+                    const result = {
+                        radioMatched: null,
+                        textInput: null,
+                    };
+                    if (!form) {
+                        return result;
+                    }
+
+                    const radios = Array.from(form.querySelectorAll('input[type="radio"]'));
+                    for (const radio of radios) {
+                        const label = document.querySelector(`label[for="${radio.id}"]`);
+                        const labelText = normalize(
+                            (label && label.textContent)
+                            || radio.closest('label')?.textContent
+                            || radio.parentElement?.textContent
+                            || ''
+                        );
+                        if (
+                            !result.radioMatched
+                            && (
+                                labelText.includes('ruc')
+                                || labelText.includes('cédula')
+                                || labelText.includes('cedula')
+                                || labelText.includes('pasaporte')
+                            )
+                        ) {
+                            radio.checked = true;
+                            radio.dispatchEvent(new Event('input', { bubbles: true }));
+                            radio.dispatchEvent(new Event('change', { bubbles: true }));
+                            radio.click();
+                            result.radioMatched = radio.id || radio.name || 'matched';
+                        }
+                    }
+
+                    const textInputs = Array.from(
+                        form.querySelectorAll('input[type="text"]')
+                    ).filter((el) => !el.disabled && !el.readOnly && isVisible(el));
+                    const target = textInputs.find((input) => {
+                        const label = document.querySelector(`label[for="${input.id}"]`);
+                        const meta = normalize(
+                            `${label?.textContent || ''} ${input.placeholder || ''} ${input.name || ''} ${input.id || ''}`
+                        );
+                        return (
+                            meta.includes('ruc')
+                            || meta.includes('cedula')
+                            || meta.includes('cédula')
+                            || meta.includes('pasaporte')
+                            || meta.includes('ident')
+                        );
+                    }) || (textInputs.length === 1 ? textInputs[0] : null);
+
+                    if (target) {
+                        target.focus();
+                        target.value = ruc;
+                        target.dispatchEvent(new Event('input', { bubbles: true }));
+                        target.dispatchEvent(new Event('change', { bubbles: true }));
+                        target.dispatchEvent(new Event('blur', { bubbles: true }));
+                        result.textInput = {
+                            id: target.id || '',
+                            name: target.name || '',
+                            value: target.value || '',
+                        };
+                    }
+                    return result;
+                }
+                """,
+                {"ruc": self._ruc},
+            )
+
         async def _set_select(
             element_id: str,
             *,
@@ -577,6 +661,9 @@ class SRINodriverEngine:
                 },
             )
         
+        criterio = await _configurar_criterio_ruc()
+        self._log.info("criterio_busqueda_configurado", criterio=criterio)
+
         # Seleccionar Año
         await _set_select('frmPrincipal:ano', label=str(self._anio))
         await asyncio.sleep(2)
