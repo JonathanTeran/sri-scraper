@@ -7,11 +7,13 @@ Manejo de errores diferenciado por tipo de excepción SRI.
 import os
 import uuid
 from datetime import datetime
+from datetime import timezone
 
 import structlog
 from celery import group
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import selectinload
 
 from config.settings import get_settings
 from db.session import get_session_factory
@@ -40,6 +42,14 @@ log = structlog.get_logger()
 
 settings = get_settings()
 
+TIPOS_CON_DETALLES = {
+    TipoComprobante.FACTURA.value,
+    TipoComprobante.LIQUIDACION.value,
+    TipoComprobante.NOTA_CREDITO.value,
+    TipoComprobante.NOTA_DEBITO.value,
+    TipoComprobante.GUIA_REMISION.value,
+}
+
 
 def _run_async(coro):
     """Ejecuta una corrutina desde contexto sync de Celery."""
@@ -48,6 +58,20 @@ def _run_async(coro):
 
 def _get_async_session() -> async_sessionmaker[AsyncSession]:
     return get_session_factory()
+
+
+def _tipo_value(tipo: TipoComprobante | str | None) -> str:
+    if isinstance(tipo, TipoComprobante):
+        return tipo.value
+    return str(tipo or "").strip().lower()
+
+
+def _normalize_db_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 async def _actualizar_ejecucion_estado(
@@ -84,60 +108,105 @@ async def _guardar_comprobante(
     xml_bytes: bytes,
     xml_raw_str: str,
     clave_hint: str | None = None,
-) -> bool:
-    """Parsea y guarda un comprobante en BD. Retorna True si es nuevo."""
+) -> str:
+    """
+    Parsea y guarda un comprobante completo en BD.
+
+    Retorna:
+        - "created": se creó un comprobante nuevo
+        - "updated": se reparó/actualizó un comprobante existente
+        - "parse_error": el XML no se pudo parsear
+    """
     try:
         comp = parse_comprobante_sri(xml_bytes)
         data = comprobante_to_dict(comp)
-    except Exception as e:
-        # Guardar con parse_error
-        log.error("parse_error", error=str(e))
-        comp_obj = Comprobante(
-            tenant_id=tenant_id,
-            estado_autorizacion="DESCONOCIDO",
-            numero_autorizacion="",
-            ambiente_autorizacion="",
-            ruc_emisor="",
-            razon_social_emisor="",
-            cod_doc="",
-            tipo_comprobante=TipoComprobante.FACTURA,
-            clave_acceso=clave_hint or str(uuid.uuid4())[:49],
-            estab="",
-            pto_emi="",
-            secuencial="",
-            serie="",
-            numero_completo="",
-            fecha_emision=utc_today(),
-            xml_raw=xml_raw_str,
-            parse_error=True,
-            parse_error_msg=str(e)[:500],
+        data["fecha_autorizacion"] = _normalize_db_datetime(
+            data.get("fecha_autorizacion")
         )
-        session.add(comp_obj)
-        return True
+    except Exception as e:
+        log.error("parse_error", error=str(e), clave_hint=clave_hint or "")
+        clave_fallback = (clave_hint or str(uuid.uuid4()))[:49]
+        existing_result = await session.execute(
+            select(Comprobante).where(
+                Comprobante.tenant_id == tenant_id,
+                Comprobante.clave_acceso == clave_fallback,
+            )
+        )
+        comp_obj = existing_result.scalar_one_or_none()
+        if comp_obj is None:
+            comp_obj = Comprobante(
+                tenant_id=tenant_id,
+                estado_autorizacion="DESCONOCIDO",
+                numero_autorizacion="",
+                ambiente_autorizacion="",
+                ruc_emisor="",
+                razon_social_emisor="",
+                cod_doc="",
+                tipo_comprobante=TipoComprobante.FACTURA,
+                clave_acceso=clave_fallback,
+                estab="",
+                pto_emi="",
+                secuencial="",
+                serie="",
+                numero_completo="",
+                fecha_emision=utc_today(),
+                xml_raw=xml_raw_str,
+                parse_error=True,
+                parse_error_msg=str(e)[:500],
+            )
+            session.add(comp_obj)
+        elif comp_obj.parse_error:
+            comp_obj.xml_raw = xml_raw_str
+            comp_obj.parse_error = True
+            comp_obj.parse_error_msg = str(e)[:500]
+        return "parse_error"
 
-    # Verificar si ya existe
     clave = data["clave_acceso"]
-    existing = await session.execute(
-        select(Comprobante.id).where(
+    existing_result = await session.execute(
+        select(Comprobante)
+        .where(
             Comprobante.tenant_id == tenant_id,
             Comprobante.clave_acceso == clave,
         )
+        .options(
+            selectinload(Comprobante.detalles),
+            selectinload(Comprobante.retenciones),
+            selectinload(Comprobante.pagos),
+        )
     )
-    if existing.scalar_one_or_none():
-        return False
+    comp_obj = existing_result.scalar_one_or_none()
+    es_nuevo = comp_obj is None
 
-    # Crear comprobante
-    comp_obj = Comprobante(
-        tenant_id=tenant_id,
-        **data,
+    xml_path = build_xml_storage_path(
+        settings.xml_storage_path,
+        tenant_ruc,
+        periodo_anio,
+        periodo_mes,
+        clave,
     )
-    session.add(comp_obj)
-    await session.flush()
+    os.makedirs(xml_path.parent, exist_ok=True)
+    with open(xml_path, "wb") as f:
+        f.write(xml_bytes)
 
-    # Guardar detalles
+    if es_nuevo:
+        comp_obj = Comprobante(
+            tenant_id=tenant_id,
+            **data,
+        )
+        session.add(comp_obj)
+        await session.flush()
+    else:
+        for key, value in data.items():
+            setattr(comp_obj, key, value)
+        comp_obj.parse_error = False
+        comp_obj.parse_error_msg = None
+        comp_obj.detalles.clear()
+        comp_obj.retenciones.clear()
+        comp_obj.pagos.clear()
+        await session.flush()
+
     for det in comp.detalles:
-        session.add(DetalleComprobante(
-            comprobante_id=comp_obj.id,
+        comp_obj.detalles.append(DetalleComprobante(
             tenant_id=tenant_id,
             orden=det.orden,
             codigo_principal=det.codigo_principal or None,
@@ -154,10 +223,8 @@ async def _guardar_comprobante(
             iva_valor=det.iva_valor,
         ))
 
-    # Guardar retenciones
     for ret in comp.retenciones:
-        session.add(ImpuestoRetencion(
-            comprobante_id=comp_obj.id,
+        comp_obj.retenciones.append(ImpuestoRetencion(
             tenant_id=tenant_id,
             codigo=ret.codigo,
             tipo_tributo=ret.tipo_tributo,
@@ -170,10 +237,8 @@ async def _guardar_comprobante(
             fecha_emision_doc_sustento=ret.fecha_emision_doc_sustento or None,
         ))
 
-    # Guardar pagos
     for pag in comp.pagos:
-        session.add(Pago(
-            comprobante_id=comp_obj.id,
+        comp_obj.pagos.append(Pago(
             tenant_id=tenant_id,
             forma_pago=pag.forma_pago,
             forma_pago_desc=pag.forma_pago_desc,
@@ -182,34 +247,42 @@ async def _guardar_comprobante(
             unidad_tiempo=pag.unidad_tiempo or None,
         ))
 
-    # Guardar XML en filesystem
-    xml_path = build_xml_storage_path(
-        settings.xml_storage_path,
-        tenant_ruc,
-        periodo_anio,
-        periodo_mes,
-        clave,
-    )
-    os.makedirs(xml_path.parent, exist_ok=True)
-    with open(xml_path, "wb") as f:
-        f.write(xml_bytes)
-
+    comp_obj.xml_raw = xml_raw_str
     comp_obj.xml_path = str(xml_path)
-    return True
+    comp_obj.parse_error = False
+    comp_obj.parse_error_msg = None
+    return "created" if es_nuevo else "updated"
 
 
-async def _comprobante_ya_guardado(
+async def _comprobante_guardado_completo(
     session: AsyncSession,
     tenant_id: uuid.UUID,
     clave_acceso: str,
 ) -> bool:
     result = await session.execute(
-        select(Comprobante.id).where(
+        select(Comprobante)
+        .where(
             Comprobante.tenant_id == tenant_id,
             Comprobante.clave_acceso == clave_acceso,
         )
+        .options(
+            selectinload(Comprobante.detalles),
+            selectinload(Comprobante.retenciones),
+            selectinload(Comprobante.pagos),
+        )
     )
-    return result.scalar_one_or_none() is not None
+    comp = result.scalar_one_or_none()
+    if comp is None:
+        return False
+    if comp.parse_error or not comp.xml_raw or not comp.xml_path:
+        return False
+
+    tipo = _tipo_value(comp.tipo_comprobante)
+    if tipo in TIPOS_CON_DETALLES and len(comp.detalles) == 0:
+        return False
+    if tipo == TipoComprobante.RETENCION.value and len(comp.retenciones) == 0:
+        return False
+    return True
 
 
 @celery_app.task(
@@ -303,7 +376,7 @@ async def _scrape_tenant_periodo_async(
                 return True
 
             async with async_session() as session:
-                exists = await _comprobante_ya_guardado(
+                exists = await _comprobante_guardado_completo(
                     session,
                     tenant_uuid,
                     clave_acceso,
@@ -341,7 +414,7 @@ async def _scrape_tenant_periodo_async(
                             errores += 1
                             continue
 
-                        es_nuevo = await _guardar_comprobante(
+                        estado_guardado = await _guardar_comprobante(
                             session,
                             tenant_uuid,
                             tenant_ruc,
@@ -351,8 +424,10 @@ async def _scrape_tenant_periodo_async(
                             xml_bytes.decode("utf-8", errors="replace"),
                             clave_hint=clave_acceso,
                         )
-                        if es_nuevo:
+                        if estado_guardado == "created":
                             nuevos += 1
+                        elif estado_guardado == "parse_error":
+                            errores += 1
 
                     progress_log.pagina_actual = pagina + 1
                     progress_log.total_nuevos += nuevos
