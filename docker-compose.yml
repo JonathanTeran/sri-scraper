@@ -1,0 +1,138 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: sri_scraper
+      POSTGRES_USER: sri
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cambiar_password}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sri"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://sri:${POSTGRES_PASSWORD:-cambiar_password}@postgres:5432/sri_scraper
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER=redis://redis:6379/0
+      - CELERY_BACKEND=redis://redis:6379/1
+      - SECRET_KEY=${SECRET_KEY:-cambiar_por_clave_aleatoria_de_64_chars_minimo_32}
+      - CAPTCHA_PROVIDER=${CAPTCHA_PROVIDER:-capsolver}
+      - TWOCAPTCHA_API_KEY=${TWOCAPTCHA_API_KEY:-}
+      - CAPSOLVER_API_KEY=${CAPSOLVER_API_KEY:-}
+      - CAPTCHA_ASSISTED_MODE=${CAPTCHA_ASSISTED_MODE:-off}
+      - CAPTCHA_ASSISTED_TIMEOUT_SEC=${CAPTCHA_ASSISTED_TIMEOUT_SEC:-180}
+      - BROWSER_PREFER_NODRIVER=${BROWSER_PREFER_NODRIVER:-true}
+      - BROWSER_PERSISTENT_CONTEXT=${BROWSER_PERSISTENT_CONTEXT:-true}
+      - BROWSER_EXECUTABLE_PATH=${BROWSER_EXECUTABLE_PATH:-}
+      - BROWSER_CHANNEL=${BROWSER_CHANNEL:-}
+      - BROWSER_PROFILE_PATH=${BROWSER_PROFILE_PATH:-/app/chrome_profile}
+      - BROWSER_PROXY_SERVER=${BROWSER_PROXY_SERVER:-}
+      - BROWSER_PROXY_USERNAME=${BROWSER_PROXY_USERNAME:-}
+      - BROWSER_PROXY_PASSWORD=${BROWSER_PROXY_PASSWORD:-}
+      - BROWSER_PROXY_BYPASS=${BROWSER_PROXY_BYPASS:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./xmls:/app/xmls
+      - ./screenshots:/app/screenshots
+      - ./sessions:/app/sessions
+      - ./chrome_profile:/app/chrome_profile
+
+  worker:
+    build: .
+    command: bash /app/start-worker.sh
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://sri:${POSTGRES_PASSWORD:-cambiar_password}@postgres:5432/sri_scraper
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER=redis://redis:6379/0
+      - CELERY_BACKEND=redis://redis:6379/1
+      - SECRET_KEY=${SECRET_KEY:-cambiar_por_clave_aleatoria_de_64_chars_minimo_32}
+      - PLAYWRIGHT_HEADLESS=false
+      - DISPLAY=:99
+      - CAPTCHA_PROVIDER=${CAPTCHA_PROVIDER:-capsolver}
+      - TWOCAPTCHA_API_KEY=${TWOCAPTCHA_API_KEY:-}
+      - CAPSOLVER_API_KEY=${CAPSOLVER_API_KEY:-}
+      - CAPTCHA_ASSISTED_MODE=${CAPTCHA_ASSISTED_MODE:-off}
+      - CAPTCHA_ASSISTED_TIMEOUT_SEC=${CAPTCHA_ASSISTED_TIMEOUT_SEC:-180}
+      - BROWSER_PREFER_NODRIVER=${BROWSER_PREFER_NODRIVER:-true}
+      - BROWSER_PERSISTENT_CONTEXT=${BROWSER_PERSISTENT_CONTEXT:-true}
+      - BROWSER_EXECUTABLE_PATH=${BROWSER_EXECUTABLE_PATH:-}
+      - BROWSER_CHANNEL=${BROWSER_CHANNEL:-}
+      - BROWSER_PROFILE_PATH=${BROWSER_PROFILE_PATH:-/app/chrome_profile}
+      - BROWSER_PROXY_SERVER=${BROWSER_PROXY_SERVER:-}
+      - BROWSER_PROXY_USERNAME=${BROWSER_PROXY_USERNAME:-}
+      - BROWSER_PROXY_PASSWORD=${BROWSER_PROXY_PASSWORD:-}
+      - BROWSER_PROXY_BYPASS=${BROWSER_PROXY_BYPASS:-}
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - ./xmls:/app/xmls
+      - ./screenshots:/app/screenshots
+      - ./sessions:/app/sessions
+      - ./chrome_profile:/app/chrome_profile
+
+  beat:
+    build: .
+    command: celery -A tasks.celery_app beat --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://sri:${POSTGRES_PASSWORD:-cambiar_password}@postgres:5432/sri_scraper
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER=redis://redis:6379/0
+      - CELERY_BACKEND=redis://redis:6379/1
+      - SECRET_KEY=${SECRET_KEY:-cambiar_por_clave_aleatoria_de_64_chars_minimo_32}
+      - CAPTCHA_PROVIDER=${CAPTCHA_PROVIDER:-capsolver}
+      - TWOCAPTCHA_API_KEY=${TWOCAPTCHA_API_KEY:-}
+      - CAPSOLVER_API_KEY=${CAPSOLVER_API_KEY:-}
+      - CAPTCHA_ASSISTED_MODE=${CAPTCHA_ASSISTED_MODE:-off}
+      - CAPTCHA_ASSISTED_TIMEOUT_SEC=${CAPTCHA_ASSISTED_TIMEOUT_SEC:-180}
+      - BROWSER_PREFER_NODRIVER=${BROWSER_PREFER_NODRIVER:-true}
+      - BROWSER_PERSISTENT_CONTEXT=${BROWSER_PERSISTENT_CONTEXT:-true}
+      - BROWSER_PROFILE_PATH=${BROWSER_PROFILE_PATH:-/app/chrome_profile}
+    depends_on:
+      - redis
+
+  flower:
+    build: .
+    command: celery -A tasks.celery_app flower --port=5555
+    environment:
+      - CELERY_BROKER=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://sri:${POSTGRES_PASSWORD:-cambiar_password}@postgres:5432/sri_scraper
+      - SECRET_KEY=${SECRET_KEY:-cambiar_por_clave_aleatoria_de_64_chars_minimo_32}
+      - CAPTCHA_PROVIDER=${CAPTCHA_PROVIDER:-capsolver}
+      - TWOCAPTCHA_API_KEY=${TWOCAPTCHA_API_KEY:-}
+      - CAPSOLVER_API_KEY=${CAPSOLVER_API_KEY:-}
+      - CAPTCHA_ASSISTED_MODE=${CAPTCHA_ASSISTED_MODE:-off}
+      - CAPTCHA_ASSISTED_TIMEOUT_SEC=${CAPTCHA_ASSISTED_TIMEOUT_SEC:-180}
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+
+volumes:
+  pgdata:

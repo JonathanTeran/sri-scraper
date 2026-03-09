@@ -1,0 +1,57 @@
+# Core
+setuptools>=69.0.0
+python-dotenv==1.0.1
+pydantic==2.6.1
+pydantic-settings==2.1.0
+
+# Web scraping
+playwright==1.42.0
+nodriver==0.32.0
+playwright-stealth==1.0.6
+
+# Database
+SQLAlchemy[asyncio]==2.0.27
+asyncpg==0.29.0
+alembic==1.13.1
+psycopg2-binary==2.9.9
+
+# Task queue
+celery[redis]==5.3.6
+redis==5.0.1
+flower==2.0.1
+
+# API
+fastapi==0.110.0
+uvicorn[standard]==0.27.1
+
+# XML / HTML parsing
+lxml==5.1.0
+beautifulsoup4==4.12.3
+
+# Security
+cryptography==42.0.2
+
+# Resilience
+tenacity==8.2.3
+
+# Logging
+structlog==24.1.0
+
+# CAPTCHA
+2captcha-python==1.2.7
+aiohttp==3.9.3
+
+# Export
+pandas==2.2.0
+openpyxl==3.1.2
+
+# Scheduler
+APScheduler==3.10.4
+
+# Testing
+pytest==8.0.1
+pytest-asyncio==0.23.5
+httpx==0.27.0
+
+# Email
+aiosmtplib==3.0.1

@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<autorizacion>
+    <estado>AUTORIZADO</estado>
+    <numeroAutorizacion>0103202601091642992100120030010000096761234567814</numeroAutorizacion>
+    <fechaAutorizacion>2026-03-01T18:51:39-05:00</fechaAutorizacion>
+    <ambiente>PRODUCCIÓN</ambiente>
+    <comprobante><![CDATA[<?xml version="1.0" encoding="UTF-8"?>
+<factura id="comprobante" version="1.1.0">
+  <infoTributaria>
+    <ambiente>2</ambiente>
+    <tipoEmision>1</tipoEmision>
+    <razonSocial>EMPRESA DEMO S.A.</razonSocial>
+    <nombreComercial>DEMO STORE</nombreComercial>
+    <ruc>0916429921001</ruc>
+    <claveAcceso>0103202601091642992100120030010000096761234567814</claveAcceso>
+    <codDoc>01</codDoc>
+    <estab>003</estab>
+    <ptoEmi>001</ptoEmi>
+    <secuencial>000009676</secuencial>
+    <dirMatriz>AV. PRINCIPAL 123</dirMatriz>
+  </infoTributaria>
+  <infoFactura>
+    <fechaEmision>01/03/2026</fechaEmision>
+    <dirEstablecimiento>SUCURSAL CENTRO</dirEstablecimiento>
+    <obligadoContabilidad>NO</obligadoContabilidad>
+    <tipoIdentificacionComprador>05</tipoIdentificacionComprador>
+    <razonSocialComprador>CLIENTE PRUEBA</razonSocialComprador>
+    <identificacionComprador>1207481803</identificacionComprador>
+    <direccionComprador>GUAYAQUIL</direccionComprador>
+    <totalSinImpuestos>27.25</totalSinImpuestos>
+    <totalDescuento>0.00</totalDescuento>
+    <totalConImpuestos>
+      <totalImpuesto>
+        <codigo>2</codigo>
+        <codigoPorcentaje>7</codigoPorcentaje>
+        <baseImponible>27.25</baseImponible>
+        <valor>0.00</valor>
+      </totalImpuesto>
+    </totalConImpuestos>
+    <propina>0.00</propina>
+    <importeTotal>27.25</importeTotal>
+    <moneda>DOLAR</moneda>
+    <pagos>
+      <pago>
+        <formaPago>19</formaPago>
+        <total>27.25</total>
+        <plazo>0</plazo>
+        <unidadTiempo>DIAS</unidadTiempo>
+      </pago>
+    </pagos>
+  </infoFactura>
+  <detalles>
+    <detalle>
+      <codigoPrincipal>10</codigoPrincipal>
+      <descripcion>Producto de prueba A</descripcion>
+      <cantidad>1</cantidad>
+      <precioUnitario>13.50</precioUnitario>
+      <descuento>0.00</descuento>
+      <precioTotalSinImpuesto>13.50</precioTotalSinImpuesto>
+      <impuestos>
+        <impuesto>
+          <codigo>2</codigo>
+          <codigoPorcentaje>7</codigoPorcentaje>
+          <tarifa>0.00</tarifa>
+          <baseImponible>13.50</baseImponible>
+          <valor>0.00</valor>
+        </impuesto>
+      </impuestos>
+    </detalle>
+    <detalle>
+      <codigoPrincipal>20</codigoPrincipal>
+      <descripcion>Producto de prueba B</descripcion>
+      <cantidad>1</cantidad>
+      <precioUnitario>13.75</precioUnitario>
+      <descuento>0.00</descuento>
+      <precioTotalSinImpuesto>13.75</precioTotalSinImpuesto>
+      <impuestos>
+        <impuesto>
+          <codigo>2</codigo>
+          <codigoPorcentaje>7</codigoPorcentaje>
+          <tarifa>0.00</tarifa>
+          <baseImponible>13.75</baseImponible>
+          <valor>0.00</valor>
+        </impuesto>
+      </impuestos>
+    </detalle>
+  </detalles>
+</factura>]]></comprobante>
+    <mensajes/>
+</autorizacion>
