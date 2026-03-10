@@ -30,6 +30,9 @@ def _normalize_key(value: str) -> str:
 
 
 TIPO_ALIASES = {
+    _normalize_key("todos"): "__all__",
+    _normalize_key("todo"): "__all__",
+    _normalize_key("all"): "__all__",
     _normalize_key("Factura"): "Factura",
     _normalize_key("factura"): "Factura",
     _normalize_key("Liquidación de compra de bienes y prestación de servicios"): (
@@ -59,6 +62,20 @@ TIPO_ALIASES = {
 def normalize_tipo_comprobante(value: str) -> str:
     """Normaliza aliases del tipo a la etiqueta exacta usada por SRI."""
     normalized = TIPO_ALIASES.get(_normalize_key(value), "")
+    if normalized == "__all__":
+        raise ValueError(
+            "Usa expand_tipo_comprobante() para resolver el alias 'todos'"
+        )
     if not normalized:
         raise ValueError(f"Tipo de comprobante no soportado: {value}")
     return normalized
+
+
+def expand_tipo_comprobante(value: str) -> list[str]:
+    """Expande un alias a uno o varios tipos canonicos del SRI."""
+    normalized = TIPO_ALIASES.get(_normalize_key(value), "")
+    if normalized == "__all__":
+        return TIPOS_SCRAPING.copy()
+    if not normalized:
+        raise ValueError(f"Tipo de comprobante no soportado: {value}")
+    return [normalized]

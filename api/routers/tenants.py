@@ -12,7 +12,7 @@ from api.dependencies import get_db, get_settings_dep
 from config.settings import Settings
 from db.models.tenant import Tenant
 from scrapers.credential_validator import validar_credenciales_sri
-from tasks.constants import normalize_tipo_comprobante
+from tasks.constants import expand_tipo_comprobante
 from utils.crypto import decrypt, encrypt
 
 router = APIRouter()
@@ -121,7 +121,7 @@ class EjecutarRequest(BaseModel):
         description=(
             "Tipo de comprobante a descargar. Valores: "
             "Factura, Liquidación de compra, Notas de Crédito, "
-            "Notas de Débito, Comprobante de Retención"
+            "Notas de Débito, Comprobante de Retención, todos"
         ),
     )
 
@@ -132,6 +132,11 @@ class EjecutarRequest(BaseModel):
                     "anio": 2026,
                     "mes": 3,
                     "tipo_comprobante": "Factura",
+                },
+                {
+                    "anio": 2026,
+                    "mes": 1,
+                    "tipo_comprobante": "todos",
                 }
             ]
         }
@@ -355,21 +360,32 @@ async def ejecutar_scraping(
         raise HTTPException(400, "Tenant desactivado")
 
     try:
-        tipo_canonico = normalize_tipo_comprobante(data.tipo_comprobante)
+        tipos_canonicos = expand_tipo_comprobante(data.tipo_comprobante)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
     from tasks.scrape_tasks import scrape_tenant_periodo
 
-    task = scrape_tenant_periodo.delay(
-        str(tenant_id),
-        data.anio,
-        data.mes,
-        tipo_canonico,
-    )
-    return {
-        "message": "Scraping encolado",
-        "task_id": task.id,
+    tasks = [
+        scrape_tenant_periodo.delay(
+            str(tenant_id),
+            data.anio,
+            data.mes,
+            tipo_canonico,
+        )
+        for tipo_canonico in tipos_canonicos
+    ]
+    response = {
+        "message": (
+            "Scraping encolado"
+            if len(tasks) == 1
+            else "Scraping encolado para todos los tipos"
+        ),
+        "task_ids": [task.id for task in tasks],
+        "tipos": tipos_canonicos,
         "tenant_ruc": tenant.ruc,
         "periodo": f"{data.anio}-{data.mes:02d}",
     }
+    if len(tasks) == 1:
+        response["task_id"] = tasks[0].id
+    return response
