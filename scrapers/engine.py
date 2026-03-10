@@ -201,6 +201,7 @@ class SRIScraperEngine:
 
         self._route_handler = None  # Playwright route interception ref
         self._comprobantes_html: list[dict] = []
+        self._assisted_manual_submit: dict | None = None
 
         self._log = log.bind(
             tenant_ruc=tenant_ruc,
@@ -1265,6 +1266,20 @@ class SRIScraperEngine:
                     keys=intercepted_data["posted_keys"],
                 )
 
+                if (
+                    intercepted_data["posted_filters"].get("source")
+                    == "frmPrincipal:j_idt36"
+                    and token
+                ):
+                    self._assisted_manual_submit = {
+                        "token": token,
+                        "source": intercepted_data["posted_filters"].get(
+                            "source"
+                        ),
+                        "captured_at": asyncio.get_running_loop().time(),
+                        "request_url": request.url,
+                    }
+
                 # Only rewrite the body when we actually swap in a solver/manual token.
                 replacement = intercepted_data.get("replacement_token")
                 if replacement and token != replacement:
@@ -1604,6 +1619,7 @@ class SRIScraperEngine:
         page = self._page
         assert page is not None
 
+        self._assisted_manual_submit = None
         timeout_sec = self._settings.captcha_assisted_timeout_sec
         self._log.warning(
             "captcha_modo_asistido",
@@ -1700,6 +1716,7 @@ class SRIScraperEngine:
         )
 
         deadline = asyncio.get_running_loop().time() + timeout_sec
+        last_manual_submit_at = 0.0
         while asyncio.get_running_loop().time() < deadline:
             result = await page.evaluate(
                 """
@@ -1776,6 +1793,26 @@ class SRIScraperEngine:
                 or result.get("tableHtmlLen", 0) > 100
             ):
                 return result
+
+            manual_submit = self._assisted_manual_submit or {}
+            manual_submit_at = float(
+                manual_submit.get("captured_at") or 0.0
+            )
+            manual_token = str(manual_submit.get("token") or "")
+            if (
+                manual_submit_at > last_manual_submit_at
+                and len(manual_token) > 100
+            ):
+                last_manual_submit_at = manual_submit_at
+                self._log.info(
+                    "captcha_asistido_submit_capturado",
+                    source=manual_submit.get("source"),
+                    token_len=len(manual_token),
+                )
+                return await self._ejecutar_consulta_controlada(
+                    token=manual_token,
+                    source="assisted",
+                )
 
             if result.get("submitRequested"):
                 token = await page.evaluate(
