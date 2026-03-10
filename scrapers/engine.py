@@ -1654,11 +1654,20 @@ class SRIScraperEngine:
                 const setStatus = (text) => {
                     if (statusEl) statusEl.textContent = text || '';
                 };
-                const assistedSubmit = () => {
-                    const tokenReady = Array.from(
+                const getTokenValue = () => {
+                    const tokenField = Array.from(
                         document.querySelectorAll('[name="g-recaptcha-response"]')
-                    ).some((el) => (el.value || '').length > 100);
-                    if (!tokenReady) {
+                    ).find((el) => (el.value || '').length > 100);
+                    const liveToken = tokenField ? tokenField.value : '';
+                    if (liveToken.length > 100) {
+                        window.__codexAssistedLastToken = liveToken;
+                        return liveToken;
+                    }
+                    return window.__codexAssistedLastToken || '';
+                };
+                const assistedSubmit = () => {
+                    const token = getTokenValue();
+                    if (token.length <= 100) {
                         setStatus('Todavia no se detecta token de captcha.');
                         return false;
                     }
@@ -1668,6 +1677,7 @@ class SRIScraperEngine:
                 };
 
                 window.__codexAssistedSubmitRequested = false;
+                window.__codexAssistedLastToken = window.__codexAssistedLastToken || '';
                 window.__codexAssistedSubmit = assistedSubmit;
                 const helperBtn = document.getElementById('codex-captcha-assist-submit');
                 if (helperBtn) {
@@ -1717,6 +1727,11 @@ class SRIScraperEngine:
                     const tokenField = Array.from(tas).find(
                         (el) => (el.value || '').length > 100
                     );
+                    const liveToken = tokenField ? tokenField.value : '';
+                    if (liveToken.length > 100) {
+                        window.__codexAssistedLastToken = liveToken;
+                    }
+                    const cachedToken = window.__codexAssistedLastToken || '';
                     const rowCount = tableBody
                         ? Array.from(tableBody.querySelectorAll('tr')).filter(
                             (row) => (row.textContent || '').trim().length > 0
@@ -1741,7 +1756,8 @@ class SRIScraperEngine:
                         tableRows: rowCount,
                         tableHtmlLen: table ? table.outerHTML.length : 0,
                         tableHtml: table ? table.outerHTML : '',
-                        tokenReady: Boolean(tokenField),
+                        tokenReady: (liveToken.length > 100) || (cachedToken.length > 100),
+                        cachedTokenLen: cachedToken.length,
                         submitRequested: Boolean(window.__codexAssistedSubmitRequested),
                         textareas: Array.from(tas).map((t, i) => ({
                             index: i,
@@ -1768,8 +1784,12 @@ class SRIScraperEngine:
                         const tokenField = Array.from(
                             document.querySelectorAll('[name="g-recaptcha-response"]')
                         ).find((el) => (el.value || '').length > 100);
+                        const liveToken = tokenField ? tokenField.value : '';
+                        if (liveToken.length > 100) {
+                            window.__codexAssistedLastToken = liveToken;
+                        }
                         window.__codexAssistedSubmitRequested = false;
-                        return tokenField ? tokenField.value : '';
+                        return liveToken || window.__codexAssistedLastToken || '';
                     }
                     """
                 )
