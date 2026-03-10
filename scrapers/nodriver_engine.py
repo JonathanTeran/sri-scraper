@@ -484,14 +484,6 @@ class SRINodriverEngine:
             ):
                 return result
 
-            # Ignore stale "Captcha incorrecta" messages from previous attempts
-            # until the operator has actually submitted the assisted flow.
-            if (
-                result.get("submitRequested")
-                and "captcha" in result.get("messages", "").lower()
-            ):
-                return result
-
             if result.get("submitRequested"):
                 token = await page.evaluate(
                     """
