@@ -1700,6 +1700,26 @@ class SRIScraperEngine:
                     helperBtn.onclick = assistedSubmit;
                 }
 
+                const interceptPortalSubmit = (event) => {
+                    if (assistedSubmit()) {
+                        if (event) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            if (typeof event.stopImmediatePropagation === 'function') {
+                                event.stopImmediatePropagation();
+                            }
+                        }
+                        return false;
+                    }
+                    return true;
+                };
+
+                const searchBtn = document.getElementById('frmPrincipal:btnBuscar');
+                if (searchBtn && !searchBtn.__codexAssistWrapped) {
+                    searchBtn.addEventListener('click', interceptPortalSubmit, true);
+                    searchBtn.__codexAssistWrapped = true;
+                }
+
                 if (typeof window.executeRecaptcha === 'function' && !window.__codexExecuteRecaptchaWrapped) {
                     const originalExecuteRecaptcha = window.executeRecaptcha;
                     window.executeRecaptcha = function(...args) {
@@ -1709,6 +1729,17 @@ class SRIScraperEngine:
                         return originalExecuteRecaptcha.apply(this, args);
                     };
                     window.__codexExecuteRecaptchaWrapped = true;
+                }
+
+                if (typeof window.onSubmit === 'function' && !window.__codexOnSubmitWrapped) {
+                    const originalOnSubmit = window.onSubmit;
+                    window.onSubmit = function(...args) {
+                        if (assistedSubmit()) {
+                            return false;
+                        }
+                        return originalOnSubmit.apply(this, args);
+                    };
+                    window.__codexOnSubmitWrapped = true;
                 }
             }
             """,
