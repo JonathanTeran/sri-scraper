@@ -1840,10 +1840,6 @@ class SRIScraperEngine:
                     source=manual_submit.get("source"),
                     token_len=len(manual_token),
                 )
-                return await self._ejecutar_consulta_controlada(
-                    token=manual_token,
-                    source="assisted",
-                )
 
             if result.get("submitRequested"):
                 token = await page.evaluate(
