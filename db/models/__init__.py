@@ -4,6 +4,7 @@ from db.models.detalle import DetalleComprobante
 from db.models.retencion import ImpuestoRetencion, TipoTributo
 from db.models.pago import Pago
 from db.models.ejecucion_log import EjecucionLog, EstadoEjecucion
+from db.models.knowledge_base import KnowledgeEntry, BlockEvent, PatternCategory
 
 __all__ = [
     "Tenant",
@@ -15,4 +16,7 @@ __all__ = [
     "Pago",
     "EjecucionLog",
     "EstadoEjecucion",
+    "KnowledgeEntry",
+    "BlockEvent",
+    "PatternCategory",
 ]

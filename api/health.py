@@ -95,6 +95,33 @@ def _check_browser(settings: Settings) -> dict:
     }
 
 
+async def _check_adaptive(settings: Settings) -> dict:
+    """Return adaptive learning strategy summary."""
+    if aioredis is None:
+        return {"status": "unavailable"}
+    r = aioredis.from_url(settings.redis_url)
+    try:
+        from scrapers.adaptive_strategy import AdaptiveStrategyTracker
+        tracker = AdaptiveStrategyTracker(r)
+        return await tracker.get_strategy_summary()
+    except Exception as exc:
+        return {"status": "error", "detail": str(exc)}
+    finally:
+        await r.aclose()
+
+
+async def _check_knowledge_base() -> dict:
+    """Return persistent knowledge base summary."""
+    try:
+        from scrapers.knowledge_base import SRIKnowledgeBase
+        from db.session import get_session_factory
+        async with get_session_factory()() as session:
+            kb = SRIKnowledgeBase(session)
+            return await kb.get_full_summary()
+    except Exception as exc:
+        return {"status": "error", "detail": str(exc)}
+
+
 async def build_health_report(settings: Settings) -> dict:
     checks = {
         "database": await _check_database(),
@@ -102,6 +129,8 @@ async def build_health_report(settings: Settings) -> dict:
         "storage": _check_storage(settings),
         "captcha": _check_captcha(settings),
         "browser": _check_browser(settings),
+        "adaptive": await _check_adaptive(settings),
+        "knowledge_base": await _check_knowledge_base(),
     }
     critical_checks = ("database", "redis", "storage", "captcha")
     overall = "ok"

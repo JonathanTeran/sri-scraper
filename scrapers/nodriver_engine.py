@@ -9,26 +9,37 @@ import enum
 import re
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 import structlog
 import nodriver as uc
+from lxml import etree
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
 
 from captcha.factory import crear_resolvers
 from config.settings import Settings
+from scrapers.adaptive_strategy import AdaptiveStrategyTracker
 from scrapers.captcha_strategy import (
     build_captcha_attempt_plan,
     resolve_provider_page_url,
 )
 from scrapers.exceptions import (
+    ProviderError,
     SRICaptchaError,
+    SRIDownloadError,
     SRILoginError,
     SRIMaintenanceError,
     SRISessionExpiredError,
     SRITimeoutError,
 )
 from scrapers.portal import RECAPTCHA_ACTION, load_js_asset
-from utils.delays import simular_actividad_humana
+from utils.delays import delay_humano, simular_actividad_humana
 from utils.time import utc_now
 
 log = structlog.get_logger()
@@ -50,8 +61,26 @@ URLS = {
     "comprobantes": (
         "https://srienlinea.sri.gob.ec/comprobantes-electronicos-internet/"
         "pages/consultas/recibidos/comprobantesRecibidos.jsf"
-    )
+    ),
 }
+
+SRI_SOAP_URL = (
+    "https://cel.sri.gob.ec/comprobantes-electronicos-ws/"
+    "AutorizacionComprobantesOffline"
+)
+
+SOAP_TEMPLATE = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    '<soapenv:Envelope '
+    'xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" '
+    'xmlns:ec="http://ec.gob.sri.ws.autorizacion">'
+    '<soapenv:Body>'
+    '<ec:autorizacionComprobante>'
+    '<claveAccesoComprobante>{clave}</claveAccesoComprobante>'
+    '</ec:autorizacionComprobante>'
+    '</soapenv:Body>'
+    '</soapenv:Envelope>'
+)
 
 MESES = [
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -88,6 +117,9 @@ class SRINodriverEngine:
         tipo_comprobante: str,
         settings: Settings,
         pagina_inicio: int = 1,
+        on_page_processed: Callable[[int, list[dict]], Awaitable[None]] | None = None,
+        should_skip_download: Callable[[str], Awaitable[bool]] | None = None,
+        collect_results: bool = True,
     ):
         self._ruc = tenant_ruc
         self._usuario = tenant_usuario
@@ -97,6 +129,9 @@ class SRINodriverEngine:
         self._tipo = tipo_comprobante
         self._settings = settings
         self._pagina_inicio = pagina_inicio
+        self._on_page_processed = on_page_processed
+        self._should_skip_download = should_skip_download
+        self._collect_results = collect_results
 
         self._browser = None
         self._page = None
@@ -108,12 +143,14 @@ class SRINodriverEngine:
         self._captcha_resolver = self._captcha_resolvers[0]["resolver"]
 
         self._comprobantes_html: list[dict] = []
+        self._ultima_pagina_procesada: int = 1
+        self._adaptive_tracker: AdaptiveStrategyTracker | None = None
 
         self._log = log.bind(
             tenant_ruc=tenant_ruc,
             periodo=f"{periodo_anio}-{periodo_mes:02d}",
             tipo=tipo_comprobante,
-            engine="nodriver"
+            engine="nodriver",
         )
 
     async def ejecutar(self) -> EjecucionResult:
@@ -131,10 +168,22 @@ class SRINodriverEngine:
                 self._log.info("sin_comprobantes")
                 return result
 
-            if self._comprobantes_html:
-                self._log.info("comprobantes_encontrados", count=len(self._comprobantes_html))
-                # For Phase 1 we just get the claves and HTML downloading will be implemented in the next step
-                
+            self._log.info(
+                "comprobantes_encontrados",
+                count=len(self._comprobantes_html),
+            )
+
+            # Download XMLs and paginate
+            xmls = await self._procesar_todas_las_paginas()
+            result.xmls_descargados = xmls
+            result.total_nuevos = len(
+                [x for x in xmls if x.get("xml_bytes")]
+            )
+            result.total_errores = len(
+                [x for x in xmls if x.get("error")]
+            )
+            result.pagina_final = self._ultima_pagina_procesada
+
         except Exception as e:
             self._log.error("error_inesperado", error=str(e))
             raise
@@ -177,9 +226,106 @@ class SRINodriverEngine:
         self._browser = await uc.start(**kwargs)
         self._page = self._browser.main_tab
 
+        # Anti-detection: inject stealth patches before any navigation
+        try:
+            await self._page.evaluate(
+                """
+                (() => {
+                    // Override dialog blockers
+                    window.alert = function() { console.log('Interceptor: dismissed alert'); };
+                    window.confirm = function() { console.log('Interceptor: dismissed confirm'); return true; };
+
+                    // Hide webdriver flag
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+                    // Fake plugins array (bots have empty plugins)
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [
+                            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                            { name: 'Native Client', filename: 'internal-nacl-plugin' },
+                        ],
+                    });
+
+                    // Fake languages
+                    Object.defineProperty(navigator, 'languages', {
+                        get: () => ['es-EC', 'es', 'en-US', 'en'],
+                    });
+
+                    // Chrome runtime (missing in headless)
+                    if (!window.chrome) {
+                        window.chrome = { runtime: {}, loadTimes: function(){}, csi: function(){} };
+                    }
+
+                    // Permissions API spoof
+                    const origQuery = window.navigator.permissions?.query;
+                    if (origQuery) {
+                        window.navigator.permissions.query = (params) => (
+                            params.name === 'notifications'
+                                ? Promise.resolve({ state: Notification.permission })
+                                : origQuery(params)
+                        );
+                    }
+
+                    // Canvas fingerprint noise (subtle randomization)
+                    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+                    HTMLCanvasElement.prototype.toDataURL = function(type) {
+                        const ctx = this.getContext('2d');
+                        if (ctx) {
+                            const style = ctx.fillStyle;
+                            ctx.fillStyle = 'rgba(255,255,255,0.01)';
+                            ctx.fillRect(0, 0, 1, 1);
+                            ctx.fillStyle = style;
+                        }
+                        return origToDataURL.apply(this, arguments);
+                    };
+
+                    // WebGL vendor/renderer spoof
+                    const getParam = WebGLRenderingContext.prototype.getParameter;
+                    WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                        if (parameter === 37445) return 'Google Inc. (Intel)';
+                        if (parameter === 37446) return 'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+                        return getParam.apply(this, arguments);
+                    };
+                })()
+                """
+            )
+        except Exception as e:
+            self._log.warning("error_inyectando_stealth", error=str(e))
+
+    async def _limpiar_sesion(self):
+        if self._browser and self._browser.connection:
+            try:
+                import nodriver.cdp.network as network
+                await self._browser.connection.send(network.clear_browser_cookies())
+                await self._browser.connection.send(network.clear_browser_cache())
+                self._log.info("sesion_limpiada")
+            except Exception as e:
+                self._log.warning("error_limpiando_sesion", error=str(e))
+
     async def _cerrar_browser(self):
         if self._browser:
-            self._browser.stop()
+            await self._limpiar_sesion()
+            try:
+                self._browser.stop()
+            except Exception as e:
+                self._log.warning("error_cerrando_browser_graceful", error=str(e))
+                
+            # Hard kill orphaned chrome processes associated with this tab if any.
+            import os
+            try:
+                browser_pid = getattr(self._browser, 'pid', None)
+                if not browser_pid and hasattr(self._browser, 'process'):
+                    browser_pid = self._browser.process.pid
+                    
+                if browser_pid:
+                    try:
+                        os.kill(browser_pid, 9)
+                        self._log.info("browser_process_killed", pid=browser_pid)
+                    except ProcessLookupError:
+                        pass
+            except Exception as e:
+                self._log.debug("error_hard_kill", error=str(e))
 
     def _captcha_assisted_available(self) -> bool:
         return (
@@ -258,21 +404,29 @@ class SRINodriverEngine:
             score=attempt.get("score"),
             page_url_mode=attempt.get("page_url_mode"),
         )
-        token = await resolver.resolver_token_recaptcha(
-            site_key=site_key,
-            page_url=page_url,
-            enterprise=attempt.get("enterprise", False),
-            action=attempt.get("action"),
-            score=attempt.get("score"),
-            invisible=attempt.get("invisible", False),
-        )
-        if token:
-            self._log.info(
-                "captcha_provider_token_obtenido",
-                provider=provider,
-                token_len=len(token),
+        try:
+            token = await resolver.resolver_token_recaptcha(
+                site_key=site_key,
+                page_url=page_url,
+                enterprise=attempt.get("enterprise", False),
+                action=attempt.get("action"),
+                score=attempt.get("score"),
+                invisible=attempt.get("invisible", False),
             )
-        return token
+            if token:
+                self._log.info(
+                    "captcha_provider_token_obtenido",
+                    provider=provider,
+                    token_len=len(token),
+                )
+            return token
+        except Exception as e:
+            msg = str(e).lower()
+            if "zero" in msg or "balance" in msg or "key" in msg:
+                self._log.error("proveedor_balance_cero_o_invalido", provider=provider, error=str(e))
+                raise ProviderError(str(e))
+            self._log.warning("proveedor_error_temporal", provider=provider, error=str(e))
+            return None
 
     async def _ejecutar_consulta_controlada(
         self,
@@ -567,14 +721,41 @@ class SRINodriverEngine:
             "error": f"assist_timeout_{timeout_sec}s",
         }
 
+    async def _wait_for_condition(
+        self,
+        js_expression: str,
+        timeout_sec: float = 15.0,
+        interval_sec: float = 0.5,
+    ) -> bool:
+        """Evaluate a JS expression periodically until it returns true or times out."""
+        deadline = asyncio.get_running_loop().time() + timeout_sec
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                result = await self._page.evaluate(js_expression)
+                if result:
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(interval_sec)
+        return False
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((SRILoginError, SRITimeoutError, Exception)),
+        reraise=True,
+    )
     async def _login(self):
         self._log.info("iniciando_login")
         await self._page.get(URLS["login"])
-        await asyncio.sleep(8)
         
-        body = await self._page.evaluate("document.body.innerText")
+        # Dynamic wait for login form
+        listo = await self._wait_for_condition(
+            "document.body.innerText.includes('Clave') || document.body.innerHTML.includes('usuario')",
+            timeout_sec=15.0
+        )
         
-        if "Clave" in body or "usuario" in await self._page.evaluate("document.body.innerHTML"):
+        if listo:
             self._log.info("formulario_login_detectado")
             
             try:
@@ -603,8 +784,11 @@ class SRINodriverEngine:
             except Exception as e:
                 self._log.warning("error_submit_login", error=str(e))
 
-            # Esperar a que se procese el login y el Keycloak redirija
-            await asyncio.sleep(15)
+            # Dynamic wait for Keycloak to redirect instead of 15s sleep
+            await self._wait_for_condition(
+                "window.location.href.includes('sri-en-linea')",
+                timeout_sec=20.0
+            )
             
         url_actual = self._page.url
         self._log.info("estado_post_login", url=url_actual)
@@ -612,17 +796,30 @@ class SRINodriverEngine:
         if "auth/realms" in url_actual:
             raise SRILoginError("No se pudo completar el login (SSO falló).")
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((SRITimeoutError, Exception)),
+        reraise=True,
+    )
     async def _navegar_comprobantes(self):
         self._log.info("navegando_a_comprobantes")
         await self._page.get(URLS["comprobantes"])
-        await asyncio.sleep(15)
+        
+        nav_1 = await self._wait_for_condition(
+            "document.body.innerHTML.includes('Comprobantes electrónicos') || document.body.innerHTML.includes('frmPrincipal')",
+            timeout_sec=15.0
+        )
         
         url_actual = self._page.url
         # If redirected to profile, try forcing navigation again
-        if "perfil" in url_actual or "sri-en-linea" in url_actual:
+        if not nav_1 and ("perfil" in url_actual or "sri-en-linea" in url_actual):
             self._log.info("forzando_navegacion_comprobantes_nuevamente")
             await self._page.get(URLS["comprobantes"])
-            await asyncio.sleep(15)
+            await self._wait_for_condition(
+                "document.body.innerHTML.includes('Comprobantes electrónicos') || document.body.innerHTML.includes('frmPrincipal')",
+                timeout_sec=20.0
+            )
             
         body = await self._page.evaluate("document.body.innerHTML")
         if "Comprobantes electrónicos" not in body and "frmPrincipal" not in body:
@@ -832,6 +1029,23 @@ class SRINodriverEngine:
 
         max_intentos = 12
         attempt_plan = self._build_captcha_attempt_plan(max_intentos)
+
+        # Adaptive reorder: sort variants by historical success rate
+        if self._adaptive_tracker:
+            try:
+                provider_attempts = [a for a in attempt_plan if a.get("mode") == "provider"]
+                other_attempts = [a for a in attempt_plan if a.get("mode") != "provider"]
+                if provider_attempts:
+                    provider_attempts = await self._adaptive_tracker.get_ordered_variants(
+                        provider_attempts,
+                    )
+                # Rebuild: native first, then reordered providers, then assisted
+                native = [a for a in other_attempts if a.get("mode") == "native"]
+                assisted = [a for a in other_attempts if a.get("mode") == "assisted"]
+                attempt_plan = native + provider_attempts + assisted
+            except Exception as e:
+                self._log.warning("adaptive_reorder_error", error=str(e))
+
         captcha_exitoso = False
         sin_datos_detectado = False
         panel_html = ""
@@ -859,12 +1073,27 @@ class SRINodriverEngine:
                         error=str(exc),
                     )
                 site_key = await self._obtener_site_key_consulta()
-                token = await self._resolver_token_con_proveedor(
-                    attempt["resolver"],
-                    attempt["provider"],
-                    site_key,
-                    attempt,
-                )
+                
+                # Verify if we should skip this provider due to a previous ProviderError
+                if getattr(self, "_failed_providers", None) and attempt.get("provider") in self._failed_providers:
+                    self._log.warning("saltando_proveedor_fallido", provider=attempt["provider"])
+                    continue
+                    
+                try:
+                    token = await self._resolver_token_con_proveedor(
+                        attempt["resolver"],
+                        attempt["provider"],
+                        site_key,
+                        attempt,
+                    )
+                except ProviderError as e:
+                    self._log.error("proveedor_fallo_duro_saltando_variantes", provider=attempt["provider"])
+                    if not hasattr(self, "_failed_providers"):
+                        self._failed_providers = set()
+                    self._failed_providers.add(attempt["provider"])
+                    await self._resetear_recaptcha()
+                    continue
+
                 if not token:
                     self._log.warning(
                         "captcha_provider_sin_token",
@@ -908,6 +1137,16 @@ class SRINodriverEngine:
                     or query_result.get("tableHtml", "")
                 )
                 captcha_exitoso = True
+                # Record adaptive success
+                if self._adaptive_tracker and attempt.get("mode") == "provider":
+                    try:
+                        await self._adaptive_tracker.record_variant_result(
+                            attempt.get("variant", "unknown"),
+                            attempt.get("provider", "unknown"),
+                            success=True,
+                        )
+                    except Exception:
+                        pass
                 break
             if "captcha" in msgs:
                 self._log.warning(
@@ -918,6 +1157,17 @@ class SRINodriverEngine:
                 )
                 if attempt["mode"] == "provider":
                     await attempt["resolver"].reportar_token_malo()
+                    # Record adaptive failure with block flag
+                    if self._adaptive_tracker:
+                        try:
+                            await self._adaptive_tracker.record_variant_result(
+                                attempt.get("variant", "unknown"),
+                                attempt.get("provider", "unknown"),
+                                success=False,
+                                blocked=True,
+                            )
+                        except Exception:
+                            pass
                 await self._resetear_recaptcha()
                 await asyncio.sleep(2)
                 continue
@@ -967,3 +1217,265 @@ class SRINodriverEngine:
         claves = list(set(re.findall(r'\b(\d{49})\b', panel_html)))
         self._comprobantes_html = [{"clave_acceso": c} for c in claves]
         return len(claves)
+
+    # ── SOAP XML download ─────────────────────────────────────────────────
+
+    async def _descargar_xml_via_soap(
+        self,
+        session,
+        clave: str,
+    ) -> tuple[bytes | None, str | None]:
+        """Download XML from SRI SOAP endpoint."""
+        import aiohttp
+
+        soap_body = SOAP_TEMPLATE.format(clave=clave)
+        headers = {
+            "Content-Type": "text/xml; charset=utf-8",
+            "SOAPAction": "",
+        }
+        try:
+            async with session.post(
+                SRI_SOAP_URL,
+                data=soap_body,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                if resp.status != 200:
+                    return None, f"HTTP {resp.status}"
+                xml_text = await resp.text()
+        except Exception as e:
+            return None, str(e)
+
+        xml_bytes = self._extraer_xml_de_soap(xml_text)
+        if xml_bytes:
+            return xml_bytes, None
+        return None, self._extraer_error_de_soap(xml_text)
+
+    def _extraer_xml_de_soap(self, soap_response: str) -> bytes | None:
+        """Extract the authorized XML from a SOAP response."""
+        try:
+            root = etree.fromstring(soap_response.encode("utf-8"))
+            for elem in root.iter():
+                tag = elem.tag.split("}")[-1] if isinstance(elem.tag, str) else ""
+                if tag == "autorizacion":
+                    return etree.tostring(elem, encoding="utf-8")
+            for elem in root.iter():
+                tag = elem.tag.split("}")[-1] if isinstance(elem.tag, str) else ""
+                if tag == "comprobante":
+                    text = elem.text
+                    if text and text.strip():
+                        return text.strip().encode("utf-8")
+        except Exception as e:
+            self._log.warning("soap_xml_parse_error", error=str(e))
+        return None
+
+    def _extraer_error_de_soap(self, soap_response: str) -> str:
+        try:
+            root = etree.fromstring(soap_response.encode("utf-8"))
+            estado = mensaje = info = None
+            for elem in root.iter():
+                tag = elem.tag.split("}")[-1]
+                text = (elem.text or "").strip()
+                if tag == "estado" and text:
+                    estado = text
+                elif tag == "mensaje" and text and mensaje is None:
+                    mensaje = text
+                elif tag == "informacionAdicional" and text and info is None:
+                    info = text
+            partes = [p for p in [estado, mensaje, info] if p]
+            return " | ".join(partes) if partes else "XML no encontrado en SOAP"
+        except Exception as e:
+            self._log.warning("soap_error_parse", error=str(e))
+            return "XML no encontrado en SOAP"
+
+    # ── Estado anómalo ─────────────────────────────────────────────────────
+
+    async def _detectar_estado_anomalo(self) -> EstadoPortal:
+        """Check for maintenance or session expiry."""
+        page = self._page
+        assert page is not None
+        try:
+            body_text = (await page.evaluate("document.body.innerText") or "").lower()
+        except Exception:
+            return EstadoPortal.NORMAL
+
+        if "mantenimiento" in body_text:
+            return EstadoPortal.MANTENIMIENTO
+        if "sesión" in body_text and ("expirada" in body_text or "caducada" in body_text):
+            return EstadoPortal.SESION_EXPIRADA
+        if "auth/realms" in (page.url or ""):
+            return EstadoPortal.SESION_EXPIRADA
+        return EstadoPortal.NORMAL
+
+    # ── Pagination + XML download ──────────────────────────────────────────
+
+    async def _procesar_todas_las_paginas(self) -> list[dict]:
+        """Iterate through all result pages, download XMLs via SOAP."""
+        import aiohttp
+
+        page = self._page
+        assert page is not None
+        resultados: list[dict] = []
+        pagina_actual = 1
+
+        # If we already extracted claves from the first query, start with those
+        # Then check for pagination
+        async with aiohttp.ClientSession() as http_session:
+            while True:
+                self._log.info("procesando_pagina", pagina=pagina_actual)
+
+                # Check for anomalous state
+                estado = await self._detectar_estado_anomalo()
+                if estado == EstadoPortal.SESION_EXPIRADA:
+                    raise SRISessionExpiredError("Sesión expirada en paginación")
+                if estado == EstadoPortal.MANTENIMIENTO:
+                    raise SRIMaintenanceError("SRI en mantenimiento")
+
+                # Extract claves from current page
+                claves_pagina = await self._extraer_claves_pagina_actual()
+                self._log.info(
+                    "claves_en_pagina",
+                    pagina=pagina_actual,
+                    total=len(claves_pagina),
+                )
+
+                resultados_pagina: list[dict] = []
+                for idx, clave in enumerate(claves_pagina):
+                    fila_data: dict = {
+                        "clave_acceso": clave,
+                        "pagina": pagina_actual,
+                        "numero_fila": idx + 1,
+                    }
+
+                    # Skip if already downloaded
+                    if self._should_skip_download is not None:
+                        if await self._should_skip_download(clave):
+                            fila_data["omitido_existente"] = True
+                            fila_data["fuente_descarga"] = "cache"
+                            resultados_pagina.append(fila_data)
+                            if self._collect_results:
+                                resultados.append(fila_data)
+                            continue
+
+                    # Download via SOAP
+                    self._log.info(
+                        "descargando_xml",
+                        idx=idx + 1,
+                        total=len(claves_pagina),
+                        clave=clave[:20] + "...",
+                    )
+                    try:
+                        xml_bytes, error = await self._descargar_xml_via_soap(
+                            http_session, clave,
+                        )
+                        if xml_bytes:
+                            fila_data["xml_bytes"] = xml_bytes
+                            fila_data["fuente_descarga"] = "soap"
+                            self._log.info(
+                                "xml_descargado",
+                                clave=clave[:20] + "...",
+                                size=len(xml_bytes),
+                            )
+                        else:
+                            fila_data["error"] = error or "No se pudo descargar XML"
+                    except Exception as e:
+                        fila_data["error"] = str(e)
+                        self._log.warning("xml_download_exception", error=str(e))
+
+                    resultados_pagina.append(fila_data)
+                    if self._collect_results:
+                        resultados.append(fila_data)
+
+                    await delay_humano(
+                        self._settings.delay_min_ms,
+                        self._settings.delay_max_ms,
+                    )
+
+                self._ultima_pagina_procesada = pagina_actual
+
+                # Persist page results via callback
+                if self._on_page_processed and resultados_pagina:
+                    await self._on_page_processed(pagina_actual, resultados_pagina)
+
+                # Try next page
+                has_next = await self._ir_siguiente_pagina()
+                if not has_next:
+                    self._log.info("ultima_pagina", pagina=pagina_actual)
+                    break
+
+                pagina_actual += 1
+                await delay_humano(
+                    self._settings.delay_between_pages_ms,
+                    self._settings.delay_between_pages_ms + 1000,
+                )
+
+        return resultados
+
+    async def _extraer_claves_pagina_actual(self) -> list[str]:
+        """Extract 49-digit access keys from the current results page."""
+        page = self._page
+        assert page is not None
+
+        html = await page.evaluate(
+            """
+            (() => {
+                const panel = document.getElementById('frmPrincipal:tablaCompRecibidos')
+                    || document.getElementById('frmPrincipal:pnldocumentosrecibidos')
+                    || document.getElementById('frmPrincipal:panelListaComprobantes');
+                return panel ? panel.innerHTML : document.body.innerHTML;
+            })()
+            """
+        )
+        claves = list(set(re.findall(r'\b(\d{49})\b', html or "")))
+        return claves
+
+    async def _ir_siguiente_pagina(self) -> bool:
+        """Click the next page button if available. Returns True if navigated."""
+        page = self._page
+        assert page is not None
+
+        has_next = await page.evaluate(
+            """
+            (() => {
+                const selectors = [
+                    'a.ui-paginator-next:not(.ui-state-disabled)',
+                    'button.ui-paginator-next:not(.ui-state-disabled)',
+                    'span.ui-paginator-next:not(.ui-state-disabled)',
+                    '.rf-ds-btn-next:not(.rf-ds-dis)',
+                    "[id$='_ds_next']:not(.rf-ds-dis)",
+                ];
+                // Scope to the results table paginator
+                const scopes = [
+                    document.getElementById('frmPrincipal:tablaCompRecibidos_paginator_bottom'),
+                    document.getElementById('frmPrincipal:tablaCompRecibidos'),
+                    document.getElementById('frmPrincipal:pnldocumentosrecibidos'),
+                    document.body,
+                ];
+                for (const scope of scopes) {
+                    if (!scope) continue;
+                    for (const sel of selectors) {
+                        const btn = scope.querySelector(sel);
+                        if (btn) {
+                            btn.click();
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            })()
+            """
+        )
+        if has_next:
+            # Wait for table to update
+            await asyncio.sleep(2)
+            await self._wait_for_condition(
+                """
+                (() => {
+                    const tbody = document.getElementById('frmPrincipal:tablaCompRecibidos_data')
+                        || document.querySelector('tbody.ui-datatable-data');
+                    return tbody && tbody.children.length > 0;
+                })()
+                """,
+                timeout_sec=10.0,
+            )
+        return bool(has_next)

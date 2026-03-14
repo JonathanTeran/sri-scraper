@@ -24,13 +24,20 @@ from db.models.pago import Pago
 from db.models.retencion import ImpuestoRetencion
 from db.models.tenant import Tenant
 from parsers.xml_parser import parse_comprobante_sri, comprobante_to_dict
+import redis.asyncio as aioredis
+
+from scrapers.adaptive_strategy import AdaptiveStrategyTracker
 from scrapers.engine import SRIScraperEngine
+from scrapers.knowledge_base import SRIKnowledgeBase
+from scrapers.nodriver_engine import SRINodriverEngine
 from scrapers.exceptions import (
+    SRIBaseError,
     SRICaptchaError,
     SRILoginError,
     SRIMaintenanceError,
     SRITimeoutError,
 )
+from db.models.knowledge_base import PatternCategory
 from tasks.async_runner import run_async
 from tasks.celery_app import celery_app
 from tasks.constants import (
@@ -438,7 +445,7 @@ async def _scrape_tenant_periodo_async(
                     progress_log.total_nuevos += nuevos
                     progress_log.total_errores += errores
 
-        engine = SRIScraperEngine(
+        engine_kwargs = dict(
             tenant_ruc=tenant_ruc,
             tenant_usuario=usuario,
             tenant_password=password,
@@ -451,7 +458,229 @@ async def _scrape_tenant_periodo_async(
             should_skip_download=_should_skip_download,
             collect_results=False,
         )
-        resultado = await engine.ejecutar()
+
+        # ── Adaptive engine selection ──────────────────────────────────
+        r = aioredis.from_url(settings.redis_url)
+        tracker = AdaptiveStrategyTracker(r, kb_session_factory=async_session)
+        try:
+            # Let the tracker decide based on historical success
+            default_engine = "nodriver" if settings.browser_prefer_nodriver else "playwright"
+            best_engine = await tracker.get_best_engine(default=default_engine)
+
+            # Check cooldown — if best engine is blocked too much, switch
+            in_cooldown, cooldown_sec = await tracker.should_cooldown_engine(best_engine)
+            if in_cooldown:
+                log.warning(
+                    "motor_en_cooldown_adaptativo",
+                    motor=best_engine,
+                    cooldown_sec=cooldown_sec,
+                )
+                best_engine = "playwright" if best_engine == "nodriver" else "nodriver"
+
+            # Adaptive delay multiplier — slow down if SRI is blocking
+            delay_mult = await tracker.get_recommended_delay_multiplier()
+            if delay_mult > 1.0:
+                engine_kwargs["settings"] = settings.model_copy(
+                    update={
+                        "delay_min_ms": int(settings.delay_min_ms * delay_mult),
+                        "delay_max_ms": int(settings.delay_max_ms * delay_mult),
+                        "delay_between_pages_ms": int(settings.delay_between_pages_ms * delay_mult),
+                    }
+                )
+                log.info(
+                    "adaptive_delays_ajustados",
+                    multiplicador=delay_mult,
+                    delay_min=engine_kwargs["settings"].delay_min_ms,
+                    delay_max=engine_kwargs["settings"].delay_max_ms,
+                )
+
+            engine_map = {
+                "nodriver": (SRINodriverEngine, SRIScraperEngine),
+                "playwright": (SRIScraperEngine, SRINodriverEngine),
+            }
+            primary_cls, fallback_cls = engine_map[best_engine]
+            primary_name = best_engine
+            fallback_name = "playwright" if best_engine == "nodriver" else "nodriver"
+
+            log.info(
+                "motor_adaptativo_seleccionado",
+                motor=primary_name,
+                fallback=fallback_name,
+                delay_mult=delay_mult,
+                tenant_ruc=tenant_ruc,
+                periodo=f"{anio}-{mes:02d}",
+            )
+
+            # Record current hour for timing analysis
+            current_hour = utc_now().hour
+
+            # Knowledge base for persistent learning
+            async def _record_to_kb(
+                engine_name: str,
+                *,
+                success: bool,
+                blocked: bool = False,
+                duration_sec: float = 0.0,
+                error: Exception | None = None,
+                variant: str | None = None,
+                provider: str | None = None,
+            ) -> None:
+                """Record result to both Redis (short-term) and PostgreSQL (long-term)."""
+                try:
+                    async with async_session() as kb_session:
+                        async with kb_session.begin():
+                            kb = SRIKnowledgeBase(kb_session)
+                            await kb.record_result(
+                                PatternCategory.ENGINE,
+                                engine_name,
+                                success=success,
+                                blocked=blocked,
+                                duration_sec=duration_sec,
+                            )
+                            await kb.record_result(
+                                PatternCategory.TIMING,
+                                f"hour_{current_hour:02d}",
+                                success=success,
+                                blocked=blocked,
+                            )
+                            if blocked and error:
+                                await kb.record_block_event(
+                                    engine=engine_name,
+                                    error_type=type(error).__name__,
+                                    error_message=str(error),
+                                    captcha_variant=variant,
+                                    captcha_provider=provider,
+                                    context={
+                                        "tenant_ruc": tenant_ruc,
+                                        "periodo": f"{anio}-{mes:02d}",
+                                        "tipo": tipo_canonico,
+                                    },
+                                )
+                except Exception as kb_exc:
+                    log.warning("knowledge_base_write_error", error=str(kb_exc))
+
+            inicio_engine = utc_now()
+            try:
+                engine = primary_cls(**engine_kwargs)
+                if hasattr(engine, '_adaptive_tracker'):
+                    engine._adaptive_tracker = tracker
+                resultado = await engine.ejecutar()
+
+                dur = (utc_now() - inicio_engine).total_seconds()
+                await tracker.record_engine_result(
+                    primary_name, success=True, duration_sec=dur,
+                )
+                await tracker.record_timing(current_hour, success=True)
+                await _record_to_kb(primary_name, success=True, duration_sec=dur)
+
+            except SRILoginError:
+                await tracker.record_engine_result(primary_name, success=False)
+                await _record_to_kb(primary_name, success=False)
+                raise
+
+            except (SRICaptchaError, SRITimeoutError) as primary_exc:
+                dur = (utc_now() - inicio_engine).total_seconds()
+                is_block = isinstance(primary_exc, SRICaptchaError)
+                await tracker.record_engine_result(
+                    primary_name, success=False, duration_sec=dur, blocked=is_block,
+                )
+                await tracker.record_timing(current_hour, success=False)
+                await _record_to_kb(
+                    primary_name, success=False, blocked=is_block,
+                    duration_sec=dur, error=primary_exc,
+                )
+
+                log.warning(
+                    "motor_primario_bloqueado_intentando_fallback",
+                    motor_primario=primary_name,
+                    motor_fallback=fallback_name,
+                    blocked=is_block,
+                    error=str(primary_exc),
+                    tenant_ruc=tenant_ruc,
+                )
+
+                inicio_fallback = utc_now()
+                try:
+                    engine = fallback_cls(**engine_kwargs)
+                    if hasattr(engine, '_adaptive_tracker'):
+                        engine._adaptive_tracker = tracker
+                    resultado = await engine.ejecutar()
+
+                    dur_fb = (utc_now() - inicio_fallback).total_seconds()
+                    await tracker.record_engine_result(
+                        fallback_name, success=True, duration_sec=dur_fb,
+                    )
+                    await _record_to_kb(fallback_name, success=True, duration_sec=dur_fb)
+                    log.info(
+                        "motor_fallback_exitoso",
+                        motor=fallback_name,
+                        tenant_ruc=tenant_ruc,
+                    )
+                except Exception as fallback_exc:
+                    dur_fb = (utc_now() - inicio_fallback).total_seconds()
+                    fb_block = isinstance(fallback_exc, SRICaptchaError)
+                    await tracker.record_engine_result(
+                        fallback_name, success=False, duration_sec=dur_fb, blocked=fb_block,
+                    )
+                    await _record_to_kb(
+                        fallback_name, success=False, blocked=fb_block,
+                        duration_sec=dur_fb, error=fallback_exc,
+                    )
+                    log.error(
+                        "ambos_motores_fallaron",
+                        motor_primario=primary_name,
+                        error_primario=str(primary_exc),
+                        motor_fallback=fallback_name,
+                        error_fallback=str(fallback_exc),
+                        tenant_ruc=tenant_ruc,
+                    )
+                    raise primary_exc
+
+            except Exception as primary_exc:
+                dur = (utc_now() - inicio_engine).total_seconds()
+                await tracker.record_engine_result(
+                    primary_name, success=False, duration_sec=dur,
+                )
+                await _record_to_kb(
+                    primary_name, success=False, duration_sec=dur, error=primary_exc,
+                )
+
+                log.warning(
+                    "motor_primario_fallo_intentando_fallback",
+                    motor_primario=primary_name,
+                    motor_fallback=fallback_name,
+                    error=str(primary_exc),
+                    tenant_ruc=tenant_ruc,
+                )
+                inicio_fallback = utc_now()
+                try:
+                    engine = fallback_cls(**engine_kwargs)
+                    if hasattr(engine, '_adaptive_tracker'):
+                        engine._adaptive_tracker = tracker
+                    resultado = await engine.ejecutar()
+
+                    dur_fb = (utc_now() - inicio_fallback).total_seconds()
+                    await tracker.record_engine_result(
+                        fallback_name, success=True, duration_sec=dur_fb,
+                    )
+                    await _record_to_kb(fallback_name, success=True, duration_sec=dur_fb)
+                    log.info("motor_fallback_exitoso", motor=fallback_name)
+                except Exception as fallback_exc:
+                    dur_fb = (utc_now() - inicio_fallback).total_seconds()
+                    await tracker.record_engine_result(
+                        fallback_name, success=False, duration_sec=dur_fb,
+                    )
+                    await _record_to_kb(
+                        fallback_name, success=False, duration_sec=dur_fb, error=fallback_exc,
+                    )
+                    log.error(
+                        "ambos_motores_fallaron",
+                        error_primario=str(primary_exc),
+                        error_fallback=str(fallback_exc),
+                    )
+                    raise primary_exc
+        finally:
+            await r.aclose()
 
         async with async_session() as session:
             async with session.begin():

@@ -18,6 +18,11 @@ class SRICaptchaError(SRIBaseError):
     pass
 
 
+class ProviderError(SRICaptchaError):
+    """Error irrecuperable de proveedor. Cambiar al fallback."""
+    pass
+
+
 class SRIMaintenanceError(SRIBaseError):
     """SRI en mantenimiento. Esperar 30min."""
     pass

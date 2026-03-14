@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from api.dependencies import get_settings_dep
 from api.health import build_health_report
-from api.routers import comprobantes, ejecuciones, exports, tenants
+from api.routers import comprobantes, ejecuciones, exports, knowledge, tenants
 from config.logging import setup_logging
 from config.settings import Settings
 from utils.runtime import ensure_runtime_directories
@@ -57,6 +57,14 @@ OPENAPI_TAGS = [
         "description": (
             "Exportación de comprobantes a archivos Excel (.xlsx) con múltiples hojas: "
             "cabeceras, detalles y retenciones."
+        ),
+    },
+    {
+        "name": "knowledge",
+        "description": (
+            "Base de conocimiento persistente del SRI. Consulta estadísticas de motores, "
+            "variantes CAPTCHA, proveedores, horarios óptimos y patrones de bloqueo "
+            "acumulados a largo plazo."
         ),
     },
 ]
@@ -112,6 +120,11 @@ def create_app() -> FastAPI:
         exports.router,
         prefix="/api/v1",
         tags=["exports"],
+    )
+    app.include_router(
+        knowledge.router,
+        prefix="/api/v1",
+        tags=["knowledge"],
     )
 
     @app.get("/health")
