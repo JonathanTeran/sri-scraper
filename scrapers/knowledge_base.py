@@ -88,9 +88,30 @@ class SRIKnowledgeBase:
         captcha_variant: str | None = None,
         captcha_provider: str | None = None,
         context: dict | None = None,
+        token_confidence: float | None = None,
+        solve_duration_sec: float | None = None,
+        proxy_used: str | None = None,
+        fingerprint_id: str | None = None,
     ) -> None:
-        """Record an individual block event for pattern analysis."""
+        """Record an individual block event with granular context.
+
+        Enhanced with:
+        - token_confidence: pre-validation confidence score (0-1)
+        - solve_duration_sec: how long the provider took to solve
+        - proxy_used: which proxy IP was active during the block
+        - fingerprint_id: browser fingerprint hash for correlation
+        """
         now = utc_now()
+        enriched_context = dict(context or {})
+        if token_confidence is not None:
+            enriched_context["token_confidence"] = token_confidence
+        if solve_duration_sec is not None:
+            enriched_context["solve_duration_sec"] = round(solve_duration_sec, 2)
+        if proxy_used:
+            enriched_context["proxy"] = proxy_used
+        if fingerprint_id:
+            enriched_context["fingerprint_id"] = fingerprint_id
+
         event = BlockEvent(
             engine=engine,
             error_type=error_type,
@@ -99,9 +120,51 @@ class SRIKnowledgeBase:
             captcha_provider=captcha_provider,
             hour_of_day=now.hour,
             day_of_week=now.weekday(),
-            context_json=context,
+            context_json=enriched_context,
         )
         self._session.add(event)
+
+    async def record_granular_result(
+        self,
+        *,
+        engine: str,
+        variant: str,
+        provider: str,
+        success: bool,
+        blocked: bool = False,
+        duration_sec: float = 0.0,
+        token_confidence: float | None = None,
+        solve_duration_sec: float | None = None,
+    ) -> None:
+        """Record a detailed result across multiple categories at once.
+
+        This is a convenience method that records to ENGINE, CAPTCHA_VARIANT,
+        and CAPTCHA_PROVIDER categories in a single call, plus cross-reference
+        metadata for correlation analysis.
+        """
+        metadata = {}
+        if token_confidence is not None:
+            metadata["token_confidence"] = round(token_confidence, 3)
+        if solve_duration_sec is not None:
+            metadata["solve_duration_sec"] = round(solve_duration_sec, 2)
+        metadata["variant"] = variant
+        metadata["provider"] = provider
+
+        await self.record_result(
+            PatternCategory.ENGINE, engine,
+            success=success, blocked=blocked,
+            duration_sec=duration_sec, metadata=metadata,
+        )
+        await self.record_result(
+            PatternCategory.CAPTCHA_VARIANT, variant,
+            success=success, blocked=blocked,
+            metadata={"engine": engine, "provider": provider},
+        )
+        await self.record_result(
+            PatternCategory.CAPTCHA_PROVIDER, provider,
+            success=success, blocked=blocked,
+            metadata={"engine": engine, "variant": variant},
+        )
 
     # ── Querying knowledge ────────────────────────────────────────────
 

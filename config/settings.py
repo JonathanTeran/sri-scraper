@@ -43,6 +43,24 @@ class Settings(BaseSettings):
     delay_max_ms: int = Field(default=2_500)
     delay_between_pages_ms: int = Field(default=2_000)
 
+    # Inteligencia avanzada de CAPTCHA
+    fingerprint_rotation: bool = Field(default=True)
+    session_warmup: bool = Field(default=True)
+    behavior_simulation: bool = Field(default=True)
+    provider_race_mode: bool = Field(default=False)
+    trap_detection: bool = Field(default=True)
+    token_prevalidation: bool = Field(default=True)
+    pattern_analysis_enabled: bool = Field(default=True)
+    pattern_analysis_interval_hours: int = Field(default=6)
+
+    # Proxy pool (comma-separated: host:port:user:pass:label:geo)
+    proxy_pool_urls: str = Field(default="")
+    proxy_rotation: bool = Field(default=False)
+
+    # Adaptive strategy TTLs (configurable)
+    adaptive_stats_ttl_days: int = Field(default=7)
+    adaptive_block_ttl_hours: int = Field(default=2)
+
     # Reintentos
     max_retries: int = Field(default=5)
     retry_wait_min_sec: int = Field(default=4)

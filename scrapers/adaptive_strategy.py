@@ -27,6 +27,7 @@ _VARIANT_KEY = f"{_PREFIX}:variant"        # per-captcha-variant stats
 _PROVIDER_KEY = f"{_PREFIX}:provider"      # per-provider stats
 _TIMING_KEY = f"{_PREFIX}:timing"          # best time windows
 _BLOCK_KEY = f"{_PREFIX}:blocks"           # recent block events
+# Defaults — overridable via Settings.adaptive_stats_ttl_days / adaptive_block_ttl_hours
 _STATS_TTL = 7 * 24 * 3600                # 7 days
 _BLOCK_TTL = 2 * 3600                     # 2 hours for block cooldowns
 
@@ -98,9 +99,18 @@ class AdaptiveStrategyTracker:
         await tracker.record_variant_result("enterprise_v3_high", "capsolver", success=False, blocked=True)
     """
 
-    def __init__(self, redis_client, *, kb_session_factory=None):
+    def __init__(
+        self,
+        redis_client,
+        *,
+        kb_session_factory=None,
+        stats_ttl: int | None = None,
+        block_ttl: int | None = None,
+    ):
         self._redis = redis_client
         self._kb_session_factory = kb_session_factory  # optional async session factory for long-term KB
+        self._stats_ttl = stats_ttl or _STATS_TTL
+        self._block_ttl = block_ttl or _BLOCK_TTL
 
     # ── Recording results ──────────────────────────────────────────────
 
@@ -348,7 +358,7 @@ class AdaptiveStrategyTracker:
             data["total_duration"] += duration_sec
             data["duration_count"] += 1
 
-        await r.setex(key, _STATS_TTL, json.dumps(data))
+        await r.setex(key, self._stats_ttl, json.dumps(data))
 
     async def _get_score(self, key: str, name: str) -> StrategyScore:
         r = self._redis
@@ -375,7 +385,7 @@ class AdaptiveStrategyTracker:
         key = f"{_BLOCK_KEY}:{source}"
         r = self._redis
         await r.incr(key)
-        await r.expire(key, _BLOCK_TTL)
+        await r.expire(key, self._block_ttl)
 
     async def _get_recent_block_count(self, source: str) -> int:
         key = f"{_BLOCK_KEY}:{source}"

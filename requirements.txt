@@ -41,6 +41,10 @@ structlog==24.1.0
 2captcha-python==1.2.7
 aiohttp==3.9.3
 
+# Local OCR (optional - for image CAPTCHA fallback)
+Pillow>=10.0.0
+pytesseract>=0.3.10
+
 # Export
 pandas==2.2.0
 openpyxl==3.1.2

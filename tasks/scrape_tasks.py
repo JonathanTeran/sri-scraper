@@ -30,6 +30,8 @@ from scrapers.adaptive_strategy import AdaptiveStrategyTracker
 from scrapers.engine import SRIScraperEngine
 from scrapers.knowledge_base import SRIKnowledgeBase
 from scrapers.nodriver_engine import SRINodriverEngine
+from scrapers.pattern_analyzer import get_active_rules
+from scrapers.proxy_pool import ProxyPool
 from scrapers.exceptions import (
     SRIBaseError,
     SRICaptchaError,
@@ -461,8 +463,42 @@ async def _scrape_tenant_periodo_async(
 
         # ── Adaptive engine selection ──────────────────────────────────
         r = aioredis.from_url(settings.redis_url)
-        tracker = AdaptiveStrategyTracker(r, kb_session_factory=async_session)
+        tracker = AdaptiveStrategyTracker(
+            r,
+            kb_session_factory=async_session,
+            stats_ttl=settings.adaptive_stats_ttl_days * 86400,
+            block_ttl=settings.adaptive_block_ttl_hours * 3600,
+        )
         try:
+            # Load auto-generated rules from pattern analysis
+            auto_rules = []
+            if settings.pattern_analysis_enabled:
+                try:
+                    auto_rules = await get_active_rules(r)
+                    if auto_rules:
+                        log.info("auto_rules_cargadas", count=len(auto_rules))
+                except Exception as rules_exc:
+                    log.debug("auto_rules_load_error", error=str(rules_exc))
+
+            # Smart proxy rotation
+            proxy_pool = None
+            if settings.proxy_rotation and settings.proxy_pool_urls:
+                proxy_pool = ProxyPool.from_config(r, settings.proxy_pool_urls)
+                best_proxy = await proxy_pool.get_best_proxy()
+                if best_proxy:
+                    engine_kwargs["settings"] = settings.model_copy(
+                        update={
+                            "browser_proxy_server": best_proxy.server,
+                            "browser_proxy_username": best_proxy.username,
+                            "browser_proxy_password": best_proxy.password,
+                        }
+                    )
+                    log.info(
+                        "proxy_rotacion_aplicada",
+                        proxy=best_proxy.server,
+                        label=best_proxy.label,
+                    )
+
             # Let the tracker decide based on historical success
             default_engine = "nodriver" if settings.browser_prefer_nodriver else "playwright"
             best_engine = await tracker.get_best_engine(default=default_engine)
@@ -477,8 +513,20 @@ async def _scrape_tenant_periodo_async(
                 )
                 best_engine = "playwright" if best_engine == "nodriver" else "nodriver"
 
+            # Apply auto-rules: global delay adjustments
+            rules_delay_mult = 1.0
+            for rule in auto_rules:
+                if rule.get("type") == "global_strategy_adjustment":
+                    rules_delay_mult = rule.get("multiplier", 1.0)
+                    log.info(
+                        "auto_rule_delay_adjustment",
+                        trend=rule.get("trend"),
+                        multiplier=rules_delay_mult,
+                    )
+
             # Adaptive delay multiplier — slow down if SRI is blocking
             delay_mult = await tracker.get_recommended_delay_multiplier()
+            delay_mult = max(delay_mult, rules_delay_mult)
             if delay_mult > 1.0:
                 engine_kwargs["settings"] = settings.model_copy(
                     update={

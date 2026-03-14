@@ -42,9 +42,15 @@ except Exception:  # pragma: no cover - fallback for partial envs/tests
 
 from captcha.factory import crear_resolvers
 from config.settings import Settings
+from scrapers.behavior import simulate_pre_captcha_activity, BehaviorProfile
 from scrapers.captcha_strategy import (
     build_captcha_attempt_plan,
     resolve_provider_page_url,
+)
+from scrapers.fingerprint import (
+    generate_fingerprint,
+    build_stealth_script,
+    build_playwright_context_options,
 )
 from scrapers.portal import (
     MESES,
@@ -64,6 +70,9 @@ from scrapers.exceptions import (
     XMLInvalidError,
 )
 from scrapers.session_manager import SessionManager
+from scrapers.token_validator import validate_token
+from scrapers.trap_detector import run_full_trap_check
+from scrapers.warmup import warmup_session_playwright
 from utils.browser_env import find_browser_executable
 from utils.crypto import decrypt
 from utils.delays import (
@@ -203,6 +212,12 @@ class SRIScraperEngine:
         self._comprobantes_html: list[dict] = []
         self._assisted_manual_submit: dict | None = None
 
+        # Generate unique fingerprint for this session
+        fp_seed = f"{tenant_ruc}:{periodo_anio}:{periodo_mes}:{id(self)}"
+        self._fingerprint = generate_fingerprint(fp_seed) if settings.fingerprint_rotation else None
+        self._behavior_profile = BehaviorProfile.random(fp_seed) if settings.behavior_simulation else None
+        self._known_sitekey: str | None = None
+
         self._log = log.bind(
             tenant_ruc=tenant_ruc,
             periodo=f"{periodo_anio}-{periodo_mes:02d}",
@@ -219,7 +234,17 @@ class SRIScraperEngine:
 
         try:
             await self._inicializar_browser()
+
+            # Session warm-up for reCAPTCHA trust
+            if self._settings.session_warmup and self._page:
+                await warmup_session_playwright(self._page)
+
             await self._login()
+
+            # Post-login warm-up
+            if self._settings.session_warmup and self._page:
+                await warmup_session_playwright(self._page, post_login=True)
+
             await self._navegar_comprobantes()
             total = await self._seleccionar_periodo_y_consultar()
 

@@ -25,6 +25,7 @@ from tenacity import (
 from captcha.factory import crear_resolvers
 from config.settings import Settings
 from scrapers.adaptive_strategy import AdaptiveStrategyTracker
+from scrapers.behavior import simulate_pre_captcha_activity, BehaviorProfile
 from scrapers.captcha_strategy import (
     build_captcha_attempt_plan,
     resolve_provider_page_url,
@@ -38,7 +39,15 @@ from scrapers.exceptions import (
     SRISessionExpiredError,
     SRITimeoutError,
 )
+from scrapers.fingerprint import (
+    generate_fingerprint,
+    build_stealth_script,
+    build_nodriver_browser_args,
+)
 from scrapers.portal import RECAPTCHA_ACTION, load_js_asset
+from scrapers.token_validator import validate_token, estimate_token_freshness
+from scrapers.trap_detector import run_full_trap_check
+from scrapers.warmup import warmup_session_nodriver
 from utils.delays import delay_humano, simular_actividad_humana
 from utils.time import utc_now
 
@@ -146,6 +155,12 @@ class SRINodriverEngine:
         self._ultima_pagina_procesada: int = 1
         self._adaptive_tracker: AdaptiveStrategyTracker | None = None
 
+        # Generate unique fingerprint for this session
+        fp_seed = f"{tenant_ruc}:{periodo_anio}:{periodo_mes}:{id(self)}"
+        self._fingerprint = generate_fingerprint(fp_seed) if settings.fingerprint_rotation else None
+        self._behavior_profile = BehaviorProfile.random(fp_seed) if settings.behavior_simulation else None
+        self._known_sitekey: str | None = None  # for trap detection
+
         self._log = log.bind(
             tenant_ruc=tenant_ruc,
             periodo=f"{periodo_anio}-{periodo_mes:02d}",
@@ -159,7 +174,17 @@ class SRINodriverEngine:
 
         try:
             await self._inicializar_browser()
+
+            # Session warm-up: browse public pages to build reCAPTCHA trust
+            if self._settings.session_warmup:
+                await warmup_session_nodriver(self._page)
+
             await self._login()
+
+            # Post-login warm-up
+            if self._settings.session_warmup:
+                await warmup_session_nodriver(self._page, post_login=True)
+
             await self._navegar_comprobantes()
             total = await self._seleccionar_periodo_y_consultar()
 
@@ -211,13 +236,24 @@ class SRINodriverEngine:
         if candidates:
             chrome_path = candidates[0]
 
-        kwargs = dict(
-            headless=headless,
-            browser_args=[
+        # Use fingerprint for browser args if available
+        if self._fingerprint:
+            browser_args = build_nodriver_browser_args(self._fingerprint)
+            self._log.info(
+                "fingerprint_aplicado",
+                fp_id=self._fingerprint.fingerprint_id,
+                screen=f"{self._fingerprint.viewport_width}x{self._fingerprint.viewport_height}",
+            )
+        else:
+            browser_args = [
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--window-size=1366,768",
-            ],
+            ]
+
+        kwargs = dict(
+            headless=headless,
+            browser_args=browser_args,
         )
         if chrome_path:
             kwargs["browser_executable_path"] = chrome_path
@@ -226,19 +262,16 @@ class SRINodriverEngine:
         self._browser = await uc.start(**kwargs)
         self._page = self._browser.main_tab
 
-        # Anti-detection: inject stealth patches before any navigation
+        # Anti-detection: inject stealth patches using fingerprint-aware script
         try:
-            await self._page.evaluate(
-                """
+            if self._fingerprint:
+                stealth_js = build_stealth_script(self._fingerprint)
+            else:
+                stealth_js = """
                 (() => {
-                    // Override dialog blockers
                     window.alert = function() { console.log('Interceptor: dismissed alert'); };
-                    window.confirm = function() { console.log('Interceptor: dismissed confirm'); return true; };
-
-                    // Hide webdriver flag
+                    window.confirm = function() { return true; };
                     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-
-                    // Fake plugins array (bots have empty plugins)
                     Object.defineProperty(navigator, 'plugins', {
                         get: () => [
                             { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
@@ -246,18 +279,12 @@ class SRINodriverEngine:
                             { name: 'Native Client', filename: 'internal-nacl-plugin' },
                         ],
                     });
-
-                    // Fake languages
                     Object.defineProperty(navigator, 'languages', {
                         get: () => ['es-EC', 'es', 'en-US', 'en'],
                     });
-
-                    // Chrome runtime (missing in headless)
                     if (!window.chrome) {
                         window.chrome = { runtime: {}, loadTimes: function(){}, csi: function(){} };
                     }
-
-                    // Permissions API spoof
                     const origQuery = window.navigator.permissions?.query;
                     if (origQuery) {
                         window.navigator.permissions.query = (params) => (
@@ -266,8 +293,6 @@ class SRINodriverEngine:
                                 : origQuery(params)
                         );
                     }
-
-                    // Canvas fingerprint noise (subtle randomization)
                     const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
                     HTMLCanvasElement.prototype.toDataURL = function(type) {
                         const ctx = this.getContext('2d');
@@ -279,8 +304,6 @@ class SRINodriverEngine:
                         }
                         return origToDataURL.apply(this, arguments);
                     };
-
-                    // WebGL vendor/renderer spoof
                     const getParam = WebGLRenderingContext.prototype.getParameter;
                     WebGLRenderingContext.prototype.getParameter = function(parameter) {
                         if (parameter === 37445) return 'Google Inc. (Intel)';
@@ -289,7 +312,7 @@ class SRINodriverEngine:
                     };
                 })()
                 """
-            )
+            await self._page.evaluate(stealth_js)
         except Exception as e:
             self._log.warning("error_inyectando_stealth", error=str(e))
 
@@ -1030,6 +1053,26 @@ class SRINodriverEngine:
         max_intentos = 12
         attempt_plan = self._build_captcha_attempt_plan(max_intentos)
 
+        # Trap detection: check for honeypots and sitekey changes before CAPTCHA
+        if self._settings.trap_detection:
+            try:
+                trap_result = await run_full_trap_check(
+                    page,
+                    known_sitekey=self._known_sitekey,
+                    extract_asset_fn=self._extraer_site_key_recaptcha,
+                )
+                if not trap_result.get("safe"):
+                    self._log.warning(
+                        "trap_warnings_pre_captcha",
+                        warnings=trap_result.get("warnings"),
+                    )
+                # Update known sitekey for future comparison
+                sk = trap_result.get("sitekey", {}).get("current_sitekey")
+                if sk:
+                    self._known_sitekey = sk
+            except Exception as exc:
+                self._log.debug("trap_detection_error", error=str(exc))
+
         # Adaptive reorder: sort variants by historical success rate
         if self._adaptive_tracker:
             try:
@@ -1065,20 +1108,29 @@ class SRINodriverEngine:
             elif attempt["mode"] == "assisted":
                 query_result = await self._ejecutar_consulta_asistida()
             else:
+                # Advanced behavior simulation before provider attempt
                 try:
-                    await simular_actividad_humana(page)
+                    if self._settings.behavior_simulation and self._behavior_profile:
+                        await simulate_pre_captcha_activity(
+                            page,
+                            profile=self._behavior_profile,
+                        )
+                    else:
+                        await simular_actividad_humana(page)
                 except Exception as exc:
                     self._log.warning(
                         "actividad_humana_pre_provider_error",
                         error=str(exc),
                     )
                 site_key = await self._obtener_site_key_consulta()
-                
+
                 # Verify if we should skip this provider due to a previous ProviderError
                 if getattr(self, "_failed_providers", None) and attempt.get("provider") in self._failed_providers:
                     self._log.warning("saltando_proveedor_fallido", provider=attempt["provider"])
                     continue
-                    
+
+                import time as _time
+                _solve_start = _time.monotonic()
                 try:
                     token = await self._resolver_token_con_proveedor(
                         attempt["resolver"],
@@ -1094,6 +1146,8 @@ class SRINodriverEngine:
                     await self._resetear_recaptcha()
                     continue
 
+                _solve_duration = _time.monotonic() - _solve_start
+
                 if not token:
                     self._log.warning(
                         "captcha_provider_sin_token",
@@ -1103,6 +1157,25 @@ class SRINodriverEngine:
                     )
                     await self._resetear_recaptcha()
                     continue
+
+                # Token pre-validation
+                if self._settings.token_prevalidation:
+                    validation = validate_token(
+                        token,
+                        variant=attempt.get("variant", ""),
+                        provider=attempt.get("provider", ""),
+                        solve_duration_sec=_solve_duration,
+                    )
+                    if not validation.should_submit:
+                        self._log.warning(
+                            "token_rechazado_pre_validacion",
+                            confidence=validation.confidence,
+                            reason=validation.reason,
+                            variant=attempt.get("variant"),
+                        )
+                        await self._resetear_recaptcha()
+                        continue
+
                 query_result = await self._ejecutar_consulta_controlada(
                     token=token,
                     source=attempt["provider"],

@@ -14,6 +14,7 @@ celery_app = Celery(
     include=[
         "tasks.scrape_tasks",
         "tasks.report_tasks",
+        "tasks.pattern_analysis_task",
     ],
 )
 
@@ -44,3 +45,12 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(minute="*/5"),
     },
 }
+
+if settings.pattern_analysis_enabled:
+    celery_app.conf.beat_schedule["analizar-patrones"] = {
+        "task": "tasks.analizar_patrones_captcha",
+        "schedule": crontab(
+            minute="0",
+            hour=f"*/{settings.pattern_analysis_interval_hours}",
+        ),
+    }
