@@ -154,6 +154,9 @@ class AdaptiveStrategyTracker:
 
     async def record_timing(self, hour: int, success: bool) -> None:
         """Record success/failure by hour of day for timing optimization."""
+        if not 0 <= hour <= 23:
+            log.warning("adaptive_invalid_hour", hour=hour)
+            return
         key = f"{_TIMING_KEY}:{hour:02d}"
         await self._increment_stats(key, success=success)
 

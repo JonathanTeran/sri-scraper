@@ -105,6 +105,14 @@ async def get_timing_stats(
     kb = SRIKnowledgeBase(db)
     dangerous = await kb.get_dangerous_hours()
 
+    def _parse_hour(key: str) -> int | None:
+        if key.startswith("hour_"):
+            try:
+                return int(key[5:])
+            except ValueError:
+                return None
+        return None
+
     return {
         "hours": [
             {
@@ -112,7 +120,7 @@ async def get_timing_stats(
                 "successes": e.successes,
                 "failures": e.failures,
                 "success_rate": round(e.success_rate, 3),
-                "dangerous": int(e.key.replace("hour_", "")) in dangerous,
+                "dangerous": _parse_hour(e.key) in dangerous,
             }
             for e in entries
         ],
